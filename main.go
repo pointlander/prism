@@ -20,6 +20,8 @@ import (
 
 const (
 	Width     = 16
+	Width2    = 16
+	Width3    = 16
 	BatchSize = 10
 	Eta       = .1
 )
@@ -162,8 +164,9 @@ func neuralNetwork(name string, orthogonality bool) {
 	weight := tf32.NewV(1)
 	weight.X = append(weight.X, 1)
 	input, output := tf32.NewV(4, BatchSize), tf32.NewV(4, BatchSize)
-	w1, b1, w2, b2 := tf32.NewV(4, Width), tf32.NewV(Width), tf32.NewV(Width, 4), tf32.NewV(4)
-	parameters := []*tf32.V{&w1, &b1, &w2, &b2}
+	w1, b1, w2, b2 := tf32.NewV(4, Width), tf32.NewV(Width), tf32.NewV(Width, Width2), tf32.NewV(Width2)
+	w3, b3, w4, b4 := tf32.NewV(Width2, Width3), tf32.NewV(Width3), tf32.NewV(Width3, 4), tf32.NewV(4)
+	parameters := []*tf32.V{&w1, &b1, &w2, &b2, &w3, &b3, &w4, &b4}
 	for _, p := range parameters {
 		for i := 0; i < cap(p.X); i++ {
 			p.X = append(p.X, random32(-1, 1))
@@ -171,10 +174,12 @@ func neuralNetwork(name string, orthogonality bool) {
 	}
 	l1 := tf32.Sigmoid(tf32.Add(tf32.Mul(w1.Meta(), input.Meta()), b1.Meta()))
 	l2 := tf32.Sigmoid(tf32.Add(tf32.Mul(w2.Meta(), l1), b2.Meta()))
-	cost := tf32.Avg(tf32.Sub(ones.Meta(), tf32.Similarity(l2, output.Meta())))
-	//cost := tf32.Avg(tf32.Quadratic(l2, output.Meta()))
+	l3 := tf32.Sigmoid(tf32.Add(tf32.Mul(w3.Meta(), l2), b3.Meta()))
+	l4 := tf32.Sigmoid(tf32.Add(tf32.Mul(w4.Meta(), l3), b4.Meta()))
+	cost := tf32.Avg(tf32.Sub(ones.Meta(), tf32.Similarity(l4, output.Meta())))
+	//cost := tf32.Avg(tf32.Quadratic(l4, output.Meta()))
 	if orthogonality {
-		cost = tf32.Add(cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Abs(tf32.Orthogonality(l1)))))
+		cost = tf32.Add(cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Abs(tf32.Orthogonality(l2)))))
 	}
 
 	length := len(datum.Fisher)
@@ -212,6 +217,9 @@ LEARN:
 					if math.IsNaN(float64(d)) {
 						fmt.Println(d, k, l)
 						break LEARN
+					} else if math.IsInf(float64(d), 0) {
+						fmt.Println(d, k, l)
+						break LEARN
 					}
 					norm += d * d
 				}
@@ -237,28 +245,29 @@ LEARN:
 			break
 		}
 		if orthogonality {
-			if total < 16.9 {
+			if total < 16.56 {
 				break
 			}
-		} else if total < 1.8 {
+		} else if total < 1 {
 			break
 		}
 	}
 
 	input = tf32.NewV(4)
 	l1 = tf32.Sigmoid(tf32.Add(tf32.Mul(w1.Meta(), input.Meta()), b1.Meta()))
+	l2 = tf32.Sigmoid(tf32.Add(tf32.Mul(w2.Meta(), l1), b2.Meta()))
 	tf32.Static.InferenceOnly = true
 	defer func() {
 		tf32.Static.InferenceOnly = false
 	}()
-	points := make([]float64, 0, Width*length)
+	points := make([]float64, 0, Width2*length)
 	for i := range datum.Fisher {
 		values := make([]float32, 0, 4)
 		for _, measure := range datum.Fisher[i].Measures {
 			values = append(values, float32(measure))
 		}
 		input.Set(values)
-		l1(func(a *tf32.V) {
+		l2(func(a *tf32.V) {
 			for _, value := range a.X {
 				points = append(points, float64(value))
 			}
