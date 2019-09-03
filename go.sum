@@ -10,6 +10,8 @@ github.com/pointlander/datum/iris v0.0.0-20190623194735-23144a0e8e67 h1:3e3Pk8Xo
 github.com/pointlander/datum/iris v0.0.0-20190623194735-23144a0e8e67/go.mod h1:zlyed+Td2CpuOq/58UhB8/2grLv71oHWLY2CPscR+2w=
 github.com/pointlander/gradient v0.0.0-20190823035512-4fe23a918086 h1:3XhCWt7fJl7twHfu3g8ep/NF4joi+1O+79P1pw2IDDU=
 github.com/pointlander/gradient v0.0.0-20190823035512-4fe23a918086/go.mod h1:eou9DfKdTNKoulHfNbnIHb6VTZLLP9OC9K9gnHw+lA8=
+github.com/pointlander/gradient v0.0.0-20190903051624-f5cc6494a34b h1:eM2lbamrGvw77K8cpeL4JGKSOZx1NpsUSx75jN096fM=
+github.com/pointlander/gradient v0.0.0-20190903051624-f5cc6494a34b/go.mod h1:eou9DfKdTNKoulHfNbnIHb6VTZLLP9OC9K9gnHw+lA8=
 golang.org/x/exp v0.0.0-20180321215751-8460e604b9de/go.mod h1:CJ0aWSM057203Lf6IL+f9T1iT9GByDxfZKAQTCR3kQA=
 golang.org/x/exp v0.0.0-20180807140117-3d87b88a115f/go.mod h1:CJ0aWSM057203Lf6IL+f9T1iT9GByDxfZKAQTCR3kQA=
 golang.org/x/exp v0.0.0-20190125153040-c74c464bbbf2/go.mod h1:CJ0aWSM057203Lf6IL+f9T1iT9GByDxfZKAQTCR3kQA=
