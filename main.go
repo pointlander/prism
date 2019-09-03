@@ -22,8 +22,8 @@ const (
 	Width     = 16
 	Width2    = 16
 	Width3    = 16
-	BatchSize = 10
-	Eta       = .1
+	BatchSize = 150
+	Eta       = .6
 )
 
 var (
@@ -157,12 +157,6 @@ func neuralNetwork(name string, orthogonality bool) {
 	random32 := func(a, b float32) float32 {
 		return (b-a)*rnd.Float32() + a
 	}
-	ones := tf32.NewV(BatchSize)
-	for i := 0; i < cap(ones.X); i++ {
-		ones.X = append(ones.X, 1)
-	}
-	weight := tf32.NewV(1)
-	weight.X = append(weight.X, 1)
 	input, output := tf32.NewV(4, BatchSize), tf32.NewV(4, BatchSize)
 	w1, b1, w2, b2 := tf32.NewV(4, Width), tf32.NewV(Width), tf32.NewV(Width, Width2), tf32.NewV(Width2)
 	w3, b3, w4, b4 := tf32.NewV(Width2, Width3), tf32.NewV(Width3), tf32.NewV(Width3, 4), tf32.NewV(4)
@@ -172,85 +166,93 @@ func neuralNetwork(name string, orthogonality bool) {
 			p.X = append(p.X, random32(-1, 1))
 		}
 	}
+	ones := tf32.NewV(BatchSize)
+	for i := 0; i < cap(ones.X); i++ {
+		ones.X = append(ones.X, 1)
+	}
 	l1 := tf32.Sigmoid(tf32.Add(tf32.Mul(w1.Meta(), input.Meta()), b1.Meta()))
 	l2 := tf32.Sigmoid(tf32.Add(tf32.Mul(w2.Meta(), l1), b2.Meta()))
 	l3 := tf32.Sigmoid(tf32.Add(tf32.Mul(w3.Meta(), l2), b3.Meta()))
 	l4 := tf32.Sigmoid(tf32.Add(tf32.Mul(w4.Meta(), l3), b4.Meta()))
 	cost := tf32.Avg(tf32.Sub(ones.Meta(), tf32.Similarity(l4, output.Meta())))
 	//cost := tf32.Avg(tf32.Quadratic(l4, output.Meta()))
-	if orthogonality {
-		cost = tf32.Add(cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Abs(tf32.Orthogonality(l2)))))
-	}
 
 	length := len(datum.Fisher)
-	data := make([]*iris.Iris, 0, length)
-	for i := range datum.Fisher {
-		data = append(data, &datum.Fisher[i])
+	learn := func(orthogonality bool) {
+		data := make([]*iris.Iris, 0, length)
+		for i := range datum.Fisher {
+			data = append(data, &datum.Fisher[i])
+		}
+
+		iterations := 1000
+		if orthogonality {
+			iterations = 1000
+		}
+		for i := 0; i < iterations; i++ {
+			for i := range data {
+				j := i + rnd.Intn(length-i)
+				data[i], data[j] = data[j], data[i]
+			}
+			total := float32(0.0)
+			for j := 0; j < length; j += BatchSize {
+				for _, p := range parameters {
+					p.Zero()
+				}
+				input.Zero()
+				output.Zero()
+				ones.Zero()
+
+				values := make([]float32, 0, 4*BatchSize)
+				for k := 0; k < BatchSize; k++ {
+					index := (j + k) % length
+					for _, measure := range data[index].Measures {
+						values = append(values, float32(measure))
+					}
+				}
+				input.Set(values)
+				output.Set(values)
+				total += tf32.Gradient(cost).X[0]
+
+				norm := float32(0)
+				for k, p := range parameters {
+					for l, d := range p.D {
+						if math.IsNaN(float64(d)) {
+							fmt.Println(d, k, l)
+							return
+						} else if math.IsInf(float64(d), 0) {
+							fmt.Println(d, k, l)
+							return
+						}
+						norm += d * d
+					}
+				}
+				norm = float32(math.Sqrt(float64(norm)))
+				if norm > 1 {
+					scaling := 1 / norm
+					for _, p := range parameters {
+						for l, d := range p.D {
+							p.X[l] -= Eta * d * scaling
+						}
+					}
+				} else {
+					for _, p := range parameters {
+						for l, d := range p.D {
+							p.X[l] -= Eta * d
+						}
+					}
+				}
+			}
+			fmt.Println(total)
+		}
 	}
 
-LEARN:
-	for i := 0; i < 1000; i++ {
-		for i := range data {
-			j := i + rnd.Intn(length-i)
-			data[i], data[j] = data[j], data[i]
-		}
-		total := float32(0.0)
-		for j := 0; j < length; j += BatchSize {
-			for _, p := range parameters {
-				p.Zero()
-			}
-
-			values := make([]float32, 0, 4*BatchSize)
-			for k := 0; k < BatchSize; k++ {
-				index := (j + k) % length
-				for _, measure := range data[index].Measures {
-					values = append(values, float32(measure))
-				}
-			}
-			input.Set(values)
-			output.Set(values)
-			total += tf32.Gradient(cost).X[0]
-
-			norm := float32(0)
-			for k, p := range parameters {
-				for l, d := range p.D {
-					if math.IsNaN(float64(d)) {
-						fmt.Println(d, k, l)
-						break LEARN
-					} else if math.IsInf(float64(d), 0) {
-						fmt.Println(d, k, l)
-						break LEARN
-					}
-					norm += d * d
-				}
-			}
-			norm = float32(math.Sqrt(float64(norm)))
-			if norm > 1 {
-				scaling := 1 / norm
-				for _, p := range parameters {
-					for l, d := range p.D {
-						p.X[l] -= Eta * d * scaling
-					}
-				}
-			} else {
-				for _, p := range parameters {
-					for l, d := range p.D {
-						p.X[l] -= Eta * d
-					}
-				}
-			}
-		}
-		fmt.Println(total)
-		if math.IsNaN(float64(total)) {
-			break
-		}
-		if orthogonality {
-			if total < 16.56 {
-				break
-			}
-		} else if total < 1 {
-			break
-		}
+	learn(false)
+	fmt.Println("orthogonality learning...")
+	if orthogonality {
+		weight := tf32.NewV(1)
+		weight.X = append(weight.X, 1)
+		cost = tf32.Add(cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Abs(tf32.Orthogonality(l2)))))
+		learn(true)
 	}
 
 	input = tf32.NewV(4)
