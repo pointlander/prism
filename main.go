@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"image/color"
 	"math"
@@ -18,11 +19,19 @@ import (
 	"github.com/pointlander/gradient/tf32"
 )
 
+type Mode int
+
+const (
+	ModeNone Mode = iota
+	ModeOrthogonality
+	ModeEntropy
+)
+
 const (
 	Width     = 16
 	Width2    = 16
 	Width3    = 16
-	BatchSize = 150
+	BatchSize = 60
 	Eta       = .6
 )
 
@@ -37,31 +46,31 @@ func load() {
 	if err != nil {
 		panic(err)
 	}
-	max := 0.0
+	max := make([]float64, 4)
 	for _, item := range datum.Fisher {
-		for _, measure := range item.Measures {
-			if measure > max {
-				max = measure
+		for i, measure := range item.Measures {
+			if measure > max[i] {
+				max[i] = measure
 			}
 		}
 	}
 	for _, item := range datum.Fisher {
 		for i, measure := range item.Measures {
-			item.Measures[i] = measure / max
+			item.Measures[i] = measure / max[i]
 		}
 	}
 
-	max = 0.0
+	max = make([]float64, 4)
 	for _, item := range datum.Bezdek {
-		for _, measure := range item.Measures {
-			if measure > max {
-				max = measure
+		for i, measure := range item.Measures {
+			if measure > max[i] {
+				max[i] = measure
 			}
 		}
 	}
 	for _, item := range datum.Bezdek {
 		for i, measure := range item.Measures {
-			item.Measures[i] = measure / max
+			item.Measures[i] = measure / max[i]
 		}
 	}
 }
@@ -72,7 +81,7 @@ var colors = [...]color.RGBA{
 	{R: 0x00, G: 0x00, B: 0xff, A: 255},
 }
 
-func plotData(data *mat.Dense, name string) {
+func plotData(data *mat.Dense, name string, training []iris.Iris) {
 	rows, cols := data.Dims()
 
 	var pc stat.PC
@@ -99,10 +108,10 @@ func plotData(data *mat.Dense, name string) {
 		label := ""
 		points := make(plotter.XYs, 0, rows)
 		for j := 0; j < rows; j++ {
-			if iris.Labels[datum.Fisher[j].Label] != i {
+			if iris.Labels[training[j].Label] != i {
 				continue
 			}
-			label = datum.Fisher[j].Label
+			label = training[j].Label
 			points = append(points, plotter.XY{X: projection.At(j, 0), Y: projection.At(j, 1)})
 		}
 
@@ -141,8 +150,8 @@ func plotData(data *mat.Dense, name string) {
 				max, match = similarity, j
 			}
 		}
-		should := iris.Labels[datum.Fisher[i].Label]
-		found := iris.Labels[datum.Fisher[match].Label]
+		should := iris.Labels[training[i].Label]
+		found := iris.Labels[training[match].Label]
 		if should != found {
 			fmt.Println(max)
 			missed++
@@ -151,7 +160,7 @@ func plotData(data *mat.Dense, name string) {
 	fmt.Println("missed", missed)
 }
 
-func neuralNetwork(name string, orthogonality bool) {
+func neuralNetwork(name string, training []iris.Iris, mode Mode) {
 	fmt.Println(name)
 	rnd := rand.New(rand.NewSource(1))
 	random32 := func(a, b float32) float32 {
@@ -177,15 +186,19 @@ func neuralNetwork(name string, orthogonality bool) {
 	cost := tf32.Avg(tf32.Sub(ones.Meta(), tf32.Similarity(l4, output.Meta())))
 	//cost := tf32.Avg(tf32.Quadratic(l4, output.Meta()))
 
-	length := len(datum.Fisher)
-	learn := func(orthogonality bool) {
+	length := len(training)
+	learn := func(mode Mode) {
 		data := make([]*iris.Iris, 0, length)
-		for i := range datum.Fisher {
-			data = append(data, &datum.Fisher[i])
+		for i := range training {
+			data = append(data, &training[i])
 		}
 
 		iterations := 1000
-		if orthogonality {
+		switch mode {
+		case ModeNone:
+		case ModeOrthogonality:
+			iterations = 1000
+		case ModeEntropy:
 			iterations = 1000
 		}
 		for i := 0; i < iterations; i++ {
@@ -246,13 +259,22 @@ func neuralNetwork(name string, orthogonality bool) {
 		}
 	}
 
-	learn(false)
-	fmt.Println("orthogonality learning...")
-	if orthogonality {
+	learn(ModeNone)
+	switch mode {
+	case ModeNone:
+		//learn(mode)
+	case ModeOrthogonality:
+		fmt.Println("orthogonality learning...")
 		weight := tf32.NewV(1)
 		weight.X = append(weight.X, 1)
 		cost = tf32.Add(cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Abs(tf32.Orthogonality(l2)))))
-		learn(true)
+		learn(mode)
+	case ModeEntropy:
+		fmt.Println("entropy learning...")
+		weight := tf32.NewV(1)
+		weight.X = append(weight.X, 1)
+		cost = tf32.Add(cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Entropy(tf32.Softmax(tf32.T(l2))))))
+		learn(mode)
 	}
 
 	input = tf32.NewV(4)
@@ -263,9 +285,9 @@ func neuralNetwork(name string, orthogonality bool) {
 		tf32.Static.InferenceOnly = false
 	}()
 	points := make([]float64, 0, Width2*length)
-	for i := range datum.Fisher {
+	for i := range training {
 		values := make([]float32, 0, 4)
-		for _, measure := range datum.Fisher[i].Measures {
+		for _, measure := range training[i].Measures {
 			values = append(values, float32(measure))
 		}
 		input.Set(values)
@@ -275,21 +297,33 @@ func neuralNetwork(name string, orthogonality bool) {
 			}
 		})
 	}
-	plotData(mat.NewDense(length, Width, points), name)
+	plotData(mat.NewDense(length, Width, points), name, training)
 }
 
-func main() {
-	once.Do(load)
+var (
+	orthogonality = flag.Bool("orthogonality", false, "orthogonality mode")
+	entropy       = flag.Bool("entropy", false, "entropy mode")
+)
 
-	length := len(datum.Fisher)
+func main() {
+	flag.Parse()
+
+	once.Do(load)
+	training := datum.Fisher
+	length := len(training)
 	data := make([]float64, 0, length*4)
-	for _, item := range datum.Fisher {
+	for _, item := range training {
 		for _, measure := range item.Measures {
 			data = append(data, measure)
 		}
 	}
-	plotData(mat.NewDense(length, 4, data), "iris.png")
+	plotData(mat.NewDense(length, 4, data), "iris.png", training)
 
-	neuralNetwork("embedding.png", false)
-	neuralNetwork("orthogonality_embedding.png", true)
+	neuralNetwork("embedding.png", training, ModeNone)
+	if *orthogonality {
+		neuralNetwork("orthogonality_embedding.png", training, ModeOrthogonality)
+	}
+	if *entropy {
+		neuralNetwork("entropy_embedding.png", training, ModeEntropy)
+	}
 }
