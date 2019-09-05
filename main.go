@@ -27,12 +27,23 @@ const (
 	ModeEntropy
 )
 
+func (m Mode) String() string {
+	switch m {
+	case ModeNone:
+		return "none"
+	case ModeOrthogonality:
+		return "orthogonality"
+	case ModeEntropy:
+		return "entropy"
+	}
+	return "unknown"
+}
+
 const (
-	Width     = 16
-	Width2    = 16
-	Width3    = 16
-	BatchSize = 60
-	Eta       = .6
+	Width  = 16
+	Width2 = 16
+	Width3 = 16
+	Eta    = .6
 )
 
 var (
@@ -153,20 +164,19 @@ func plotData(data *mat.Dense, name string, training []iris.Iris) {
 		should := iris.Labels[training[i].Label]
 		found := iris.Labels[training[match].Label]
 		if should != found {
-			fmt.Println(max)
 			missed++
 		}
 	}
 	fmt.Println("missed", missed)
 }
 
-func neuralNetwork(name string, training []iris.Iris, mode Mode) {
-	fmt.Println(name)
+func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) {
+	fmt.Println(mode.String())
 	rnd := rand.New(rand.NewSource(1))
 	random32 := func(a, b float32) float32 {
 		return (b-a)*rnd.Float32() + a
 	}
-	input, output := tf32.NewV(4, BatchSize), tf32.NewV(4, BatchSize)
+	input, output := tf32.NewV(4, batchSize), tf32.NewV(4, batchSize)
 	w1, b1, w2, b2 := tf32.NewV(4, Width), tf32.NewV(Width), tf32.NewV(Width, Width2), tf32.NewV(Width2)
 	w3, b3, w4, b4 := tf32.NewV(Width2, Width3), tf32.NewV(Width3), tf32.NewV(Width3, 4), tf32.NewV(4)
 	parameters := []*tf32.V{&w1, &b1, &w2, &b2, &w3, &b3, &w4, &b4}
@@ -175,7 +185,7 @@ func neuralNetwork(name string, training []iris.Iris, mode Mode) {
 			p.X = append(p.X, random32(-1, 1))
 		}
 	}
-	ones := tf32.NewV(BatchSize)
+	ones := tf32.NewV(batchSize)
 	for i := 0; i < cap(ones.X); i++ {
 		ones.X = append(ones.X, 1)
 	}
@@ -187,27 +197,39 @@ func neuralNetwork(name string, training []iris.Iris, mode Mode) {
 	//cost := tf32.Avg(tf32.Quadratic(l4, output.Meta()))
 
 	length := len(training)
-	learn := func(mode Mode) {
+	learn := func(mode Mode, makePlot bool) {
 		data := make([]*iris.Iris, 0, length)
 		for i := range training {
 			data = append(data, &training[i])
 		}
 
+		p, err := plot.New()
+		if err != nil {
+			panic(err)
+		}
+
+		p.Title.Text = mode.String()
+		p.X.Label.Text = "epochs"
+		p.Y.Label.Text = "cost"
+
 		iterations := 1000
 		switch mode {
 		case ModeNone:
 		case ModeOrthogonality:
-			iterations = 1000
+			iterations = 300
 		case ModeEntropy:
 			iterations = 1000
 		}
+
+		points := make(plotter.XYs, 0, iterations)
+
 		for i := 0; i < iterations; i++ {
 			for i := range data {
 				j := i + rnd.Intn(length-i)
 				data[i], data[j] = data[j], data[i]
 			}
 			total := float32(0.0)
-			for j := 0; j < length; j += BatchSize {
+			for j := 0; j < length; j += batchSize {
 				for _, p := range parameters {
 					p.Zero()
 				}
@@ -215,8 +237,8 @@ func neuralNetwork(name string, training []iris.Iris, mode Mode) {
 				output.Zero()
 				ones.Zero()
 
-				values := make([]float32, 0, 4*BatchSize)
-				for k := 0; k < BatchSize; k++ {
+				values := make([]float32, 0, 4*batchSize)
+				for k := 0; k < batchSize; k++ {
 					index := (j + k) % length
 					for _, measure := range data[index].Measures {
 						values = append(values, float32(measure))
@@ -255,26 +277,40 @@ func neuralNetwork(name string, training []iris.Iris, mode Mode) {
 					}
 				}
 			}
-			fmt.Println(total)
+			points = append(points, plotter.XY{X: float64(i), Y: float64(total)})
+		}
+
+		scatter, err := plotter.NewScatter(points)
+		if err != nil {
+			panic(err)
+		}
+		scatter.GlyphStyle.Radius = vg.Length(1)
+		scatter.GlyphStyle.Shape = draw.CircleGlyph{}
+		p.Add(scatter)
+
+		if makePlot {
+			err = p.Save(8*vg.Inch, 8*vg.Inch, fmt.Sprintf("epochs_%s.png", mode.String()))
+			if err != nil {
+				panic(err)
+			}
 		}
 	}
 
-	learn(ModeNone)
 	switch mode {
 	case ModeNone:
-		//learn(mode)
+		learn(ModeNone, true)
 	case ModeOrthogonality:
-		fmt.Println("orthogonality learning...")
+		learn(ModeNone, false)
 		weight := tf32.NewV(1)
 		weight.X = append(weight.X, 1)
 		cost = tf32.Add(cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Abs(tf32.Orthogonality(l2)))))
-		learn(mode)
+		learn(mode, true)
 	case ModeEntropy:
-		fmt.Println("entropy learning...")
+		learn(ModeNone, false)
 		weight := tf32.NewV(1)
-		weight.X = append(weight.X, 1)
+		weight.X = append(weight.X, .5)
 		cost = tf32.Add(cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Entropy(tf32.Softmax(tf32.T(l2))))))
-		learn(mode)
+		learn(mode, true)
 	}
 
 	input = tf32.NewV(4)
@@ -297,7 +333,7 @@ func neuralNetwork(name string, training []iris.Iris, mode Mode) {
 			}
 		})
 	}
-	plotData(mat.NewDense(length, Width, points), name, training)
+	plotData(mat.NewDense(length, Width, points), fmt.Sprintf("embedding_%s.png", mode.String()), training)
 }
 
 var (
@@ -319,11 +355,11 @@ func main() {
 	}
 	plotData(mat.NewDense(length, 4, data), "iris.png", training)
 
-	neuralNetwork("embedding.png", training, ModeNone)
+	neuralNetwork(training, 10, ModeNone)
 	if *orthogonality {
-		neuralNetwork("orthogonality_embedding.png", training, ModeOrthogonality)
+		neuralNetwork(training, 150, ModeOrthogonality)
 	}
 	if *entropy {
-		neuralNetwork("entropy_embedding.png", training, ModeEntropy)
+		neuralNetwork(training, 60, ModeEntropy)
 	}
 }
