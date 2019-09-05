@@ -24,6 +24,7 @@ type Mode int
 const (
 	ModeNone Mode = iota
 	ModeOrthogonality
+	ModeParallel
 	ModeEntropy
 )
 
@@ -33,6 +34,8 @@ func (m Mode) String() string {
 		return "none"
 	case ModeOrthogonality:
 		return "orthogonality"
+	case ModeParallel:
+		return "parallel"
 	case ModeEntropy:
 		return "entropy"
 	}
@@ -217,6 +220,8 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) {
 		case ModeNone:
 		case ModeOrthogonality:
 			iterations = 300
+		case ModeParallel:
+			iterations = 1000
 		case ModeEntropy:
 			iterations = 1000
 		}
@@ -305,6 +310,16 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) {
 		weight.X = append(weight.X, 1)
 		cost = tf32.Add(cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Abs(tf32.Orthogonality(l2)))))
 		learn(mode, true)
+	case ModeParallel:
+		learn(ModeNone, false)
+		ones := tf32.NewV(((batchSize - 1) * batchSize) / 2)
+		for i := 0; i < cap(ones.X); i++ {
+			ones.X = append(ones.X, 1)
+		}
+		weight := tf32.NewV(1)
+		weight.X = append(weight.X, 1)
+		cost = tf32.Add(cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Sub(ones.Meta(), tf32.Orthogonality(l2)))))
+		learn(mode, true)
 	case ModeEntropy:
 		learn(ModeNone, false)
 		weight := tf32.NewV(1)
@@ -338,6 +353,7 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) {
 
 var (
 	orthogonality = flag.Bool("orthogonality", false, "orthogonality mode")
+	parallel      = flag.Bool("parallel", false, "parallel mode")
 	entropy       = flag.Bool("entropy", false, "entropy mode")
 )
 
@@ -358,6 +374,9 @@ func main() {
 	neuralNetwork(training, 10, ModeNone)
 	if *orthogonality {
 		neuralNetwork(training, 150, ModeOrthogonality)
+	}
+	if *parallel {
+		neuralNetwork(training, 150, ModeParallel)
 	}
 	if *entropy {
 		neuralNetwork(training, 60, ModeEntropy)
