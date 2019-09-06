@@ -25,6 +25,7 @@ const (
 	ModeNone Mode = iota
 	ModeOrthogonality
 	ModeParallel
+	ModeMixed
 	ModeEntropy
 )
 
@@ -34,6 +35,8 @@ func (m Mode) String() string {
 		return "none"
 	case ModeOrthogonality:
 		return "orthogonality"
+	case ModeMixed:
+		return "mixed"
 	case ModeParallel:
 		return "parallel"
 	case ModeEntropy:
@@ -222,6 +225,8 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) {
 			iterations = 300
 		case ModeParallel:
 			iterations = 1000
+		case ModeMixed:
+			iterations = 600
 		case ModeEntropy:
 			iterations = 1000
 		}
@@ -320,6 +325,43 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) {
 		weight.X = append(weight.X, 1)
 		cost = tf32.Add(cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Sub(ones.Meta(), tf32.Orthogonality(l2)))))
 		learn(mode, true)
+	case ModeMixed:
+		learn(ModeNone, false)
+		pairs := make([]int, 0, length)
+		for i, a := range training {
+			max, match := -1.0, 0
+			for j, b := range training {
+				if j == i {
+					continue
+				}
+				sumAB, sumAA, sumBB := 0.0, 0.0, 0.0
+				for k, aa := range a.Measures {
+					bb := b.Measures[k]
+					sumAB += aa * bb
+					sumAA += aa * aa
+					sumBB += bb * bb
+				}
+				similarity := sumAB / (math.Sqrt(sumAA) * math.Sqrt(sumBB))
+				if similarity > max {
+					max, match = similarity, j
+				}
+			}
+			pairs = append(pairs, match)
+		}
+		mask := tf32.NewV(((batchSize - 1) * batchSize) / 2)
+		for i := 0; i < batchSize; i++ {
+			for j := i + 1; j < batchSize; j++ {
+				if pairs[i] == j || pairs[j] == i {
+					mask.X = append(mask.X, 1)
+				} else {
+					mask.X = append(mask.X, 0)
+				}
+			}
+		}
+		weight := tf32.NewV(1)
+		weight.X = append(weight.X, 1)
+		cost = tf32.Add(cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Abs(tf32.Sub(mask.Meta(), tf32.Orthogonality(l2))))))
+		learn(mode, true)
 	case ModeEntropy:
 		learn(ModeNone, false)
 		weight := tf32.NewV(1)
@@ -354,6 +396,7 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) {
 var (
 	orthogonality = flag.Bool("orthogonality", false, "orthogonality mode")
 	parallel      = flag.Bool("parallel", false, "parallel mode")
+	mixed         = flag.Bool("mixed", false, "mixed mode")
 	entropy       = flag.Bool("entropy", false, "entropy mode")
 )
 
@@ -377,6 +420,9 @@ func main() {
 	}
 	if *parallel {
 		neuralNetwork(training, 150, ModeParallel)
+	}
+	if *mixed {
+		neuralNetwork(training, 150, ModeMixed)
 	}
 	if *entropy {
 		neuralNetwork(training, 60, ModeEntropy)
