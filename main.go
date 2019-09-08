@@ -4,8 +4,11 @@ import (
 	"flag"
 	"fmt"
 	"image/color"
+	"io"
 	"math"
 	"math/rand"
+	"os"
+	"sort"
 	"sync"
 
 	"gonum.org/v1/gonum/mat"
@@ -174,6 +177,137 @@ func plotData(data *mat.Dense, name string, training []iris.Iris) {
 		}
 	}
 	fmt.Println("missed", missed)
+}
+
+func printTable(out io.Writer, headers []string, rows [][]string) {
+	sizes := make([]int, len(rows))
+	for i, header := range headers {
+		sizes[i] = len(header)
+	}
+	for _, row := range rows {
+		for j, item := range row {
+			if length := len(item); length > sizes[j] {
+				sizes[j] = length
+			}
+		}
+	}
+
+	fmt.Fprintf(out, "| ")
+	for i, header := range headers {
+		fmt.Fprintf(out, "%s", header)
+		spaces := sizes[i] - len(header)
+		for spaces > 0 {
+			fmt.Fprintf(out, " ")
+			spaces--
+		}
+		fmt.Fprintf(out, " | ")
+	}
+	fmt.Fprintf(out, "\n| ")
+	for i, header := range headers {
+		dashes := len(header)
+		if sizes[i] > dashes {
+			dashes = sizes[i]
+		}
+		for dashes > 0 {
+			fmt.Fprintf(out, "-")
+			dashes--
+		}
+		fmt.Fprintf(out, " | ")
+	}
+	fmt.Fprintf(out, "\n")
+	for _, row := range rows {
+		fmt.Fprintf(out, "| ")
+		for i, entry := range row {
+			spaces := sizes[i] - len(entry)
+			fmt.Fprintf(out, "%s", entry)
+			for spaces > 0 {
+				fmt.Fprintf(out, " ")
+				spaces--
+			}
+			fmt.Fprintf(out, " | ")
+		}
+		fmt.Fprintf(out, "\n")
+	}
+}
+
+type Reduction struct {
+	Row, Column int
+	Pivot       float64
+	Max         float64
+	Left, Right *Reduction
+}
+
+func (r *Reduction) String() string {
+	var serialize func(r *Reduction, depth int) string
+	serialize = func(r *Reduction, depth int) string {
+		spaces := ""
+		for i := 0; i < depth; i++ {
+			spaces += " "
+		}
+		left, right := "", ""
+		if r.Left != nil {
+			left = serialize(r.Left, depth+1)
+		}
+		if r.Right != nil {
+			right = serialize(r.Right, depth+1)
+		}
+		return fmt.Sprintf("%s%d %f %f\n", spaces, r.Column, r.Pivot, r.Max) + left + right
+	}
+	return serialize(r, 0)
+}
+
+func (r *Reduction) Label(label, depth uint, cutoff float64, data []float64) uint {
+	if r == nil {
+		return label
+	} else if r.Max < cutoff {
+		return label
+	} else if data[r.Column] > r.Pivot {
+		return r.Right.Label(label|(1<<depth), depth+1, cutoff, data)
+	}
+	return r.Left.Label(label, depth+1, cutoff, data)
+}
+
+func variance(column int, rows [][]float64) float64 {
+	n, sum := float64(len(rows)), 0.0
+	for _, row := range rows {
+		sum += row[column]
+	}
+	average, variance := sum/n, 0.0
+	for _, row := range rows {
+		v := row[column] - average
+		variance += v * v
+	}
+	return variance / n
+}
+
+func varianceReduction(columns int, rows [][]float64, depth int) *Reduction {
+	reduction := Reduction{}
+	for k := 0; k < columns; k++ {
+		sort.Slice(rows, func(i, j int) bool {
+			return rows[i][k] < rows[j][k]
+		})
+		total := variance(k, rows)
+		for i, row := range rows[:len(rows)-1] {
+			a, b := variance(k, rows[:i+1]), variance(k, rows[i+1:])
+			if cost := total - (a + b); cost > reduction.Max {
+				reduction.Max, reduction.Row, reduction.Column, reduction.Pivot = cost, i, k, row[k]
+			}
+		}
+	}
+	depth--
+	if depth <= 0 {
+		return &reduction
+	}
+
+	rowscp := make([][]float64, len(rows))
+	copy(rowscp, rows)
+	sort.Slice(rowscp, func(i, j int) bool {
+		return rowscp[i][reduction.Column] < rowscp[j][reduction.Column]
+	})
+	reduction.Left, reduction.Right =
+		varianceReduction(columns, rowscp[:reduction.Row+1], depth),
+		varianceReduction(columns, rowscp[reduction.Row+1:], depth)
+	return &reduction
 }
 
 func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) {
@@ -390,7 +524,52 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) {
 			}
 		})
 	}
+
+	out, err := os.Create(fmt.Sprintf("result_%s.md", mode.String()))
+	if err != nil {
+		panic(err)
+	}
+	defer out.Close()
+
+	fmt.Fprintf(out, "# Training cost vs epochs\n")
+	fmt.Fprintf(out, "![epochs of %s](epochs_%s.png?raw=true)]\n\n", mode.String(), mode.String())
+
+	items := make([][]float64, 0, length)
+	for i := 0; i < len(points); i += Width2 {
+		item := make([]float64, 0, Width2)
+		for j := 0; j < Width2; j++ {
+			item = append(item, points[i+j])
+		}
+		items = append(items, item)
+	}
+	reduction := varianceReduction(Width2, items, 2)
+	fmt.Fprintf(out, "# Decision tree\n")
+	fmt.Fprintf(out, "```\n")
+	fmt.Fprintf(out, "%s", reduction.String())
+	fmt.Fprintf(out, "```\n\n")
+
+	headers, rows := make([]string, 0, Width2+2), make([][]string, 0, length)
+	headers = append(headers, "label", "cluster")
+	for i := 0; i < Width2; i++ {
+		headers = append(headers, fmt.Sprintf("%d", i))
+	}
+	index := 0
+	for _, item := range items {
+		row := make([]string, 0, Width2+2)
+		row = append(row, training[index].Label, fmt.Sprintf("%d", reduction.Label(0, 0, .01, item)))
+		for _, value := range item {
+			row = append(row, fmt.Sprintf("%f", value))
+		}
+		rows = append(rows, row)
+		index++
+	}
+	fmt.Fprintf(out, "# Output of neural network middle layer\n")
+	printTable(out, headers, rows)
+	fmt.Fprintf(out, "\n")
+
 	plotData(mat.NewDense(length, Width, points), fmt.Sprintf("embedding_%s.png", mode.String()), training)
+	fmt.Fprintf(out, "# PCA of network middle layer\n")
+	fmt.Fprintf(out, "![embedding of %s](embedding_%s.png?raw=true)]\n", mode.String(), mode.String())
 }
 
 var (
