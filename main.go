@@ -238,22 +238,36 @@ type Reduction struct {
 }
 
 func (r *Reduction) String() string {
-	var serialize func(r *Reduction, depth int) string
-	serialize = func(r *Reduction, depth int) string {
+	var serialize func(r *Reduction, label, depth uint) string
+	serialize = func(r *Reduction, label, depth uint) string {
 		spaces := ""
-		for i := 0; i < depth; i++ {
+		for i := uint(0); i < depth; i++ {
 			spaces += " "
 		}
 		left, right := "", ""
 		if r.Left != nil {
-			left = serialize(r.Left, depth+1)
+			left = serialize(r.Left, label, depth+1)
 		}
 		if r.Right != nil {
-			right = serialize(r.Right, depth+1)
+			right = serialize(r.Right, label|(1<<depth), depth+1)
 		}
-		return fmt.Sprintf("%s%d %f %f\n", spaces, r.Column, r.Pivot, r.Max) + left + right
+		layer := fmt.Sprintf("%s// variance reduction: %f\n", spaces, r.Max)
+		layer += fmt.Sprintf("%sif output[%d] > %f {\n", spaces, r.Column, r.Pivot)
+		if right == "" {
+			layer += fmt.Sprintf("%s label := %d\n", spaces, label|(1<<depth))
+		} else {
+			layer += fmt.Sprintf("%s\n", right)
+		}
+		layer += fmt.Sprintf("%s} else {\n", spaces)
+		if left == "" {
+			layer += fmt.Sprintf("%s label := %d\n", spaces, label)
+		} else {
+			layer += fmt.Sprintf("%s\n", left)
+		}
+		layer += fmt.Sprintf("%s}", spaces)
+		return layer
 	}
-	return serialize(r, 0)
+	return serialize(r, 0, 0)
 }
 
 func (r *Reduction) Label(label, depth uint, cutoff float64, data []float64) uint {
@@ -544,8 +558,8 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) {
 	}
 	reduction := varianceReduction(Width2, items, 2)
 	fmt.Fprintf(out, "# Decision tree\n")
-	fmt.Fprintf(out, "```\n")
-	fmt.Fprintf(out, "%s", reduction.String())
+	fmt.Fprintf(out, "```go\n")
+	fmt.Fprintf(out, "%s\n", reduction.String())
 	fmt.Fprintf(out, "```\n\n")
 
 	headers, rows := make([]string, 0, Width2+2), make([][]string, 0, length)
