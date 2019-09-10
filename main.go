@@ -66,31 +66,31 @@ func load() {
 	if err != nil {
 		panic(err)
 	}
-	max := make([]float64, 4)
+	max := 0.0
 	for _, item := range datum.Fisher {
-		for i, measure := range item.Measures {
-			if measure > max[i] {
-				max[i] = measure
+		for _, measure := range item.Measures {
+			if measure > max {
+				max = measure
 			}
 		}
 	}
 	for _, item := range datum.Fisher {
 		for i, measure := range item.Measures {
-			item.Measures[i] = measure / max[i]
+			item.Measures[i] = measure / max
 		}
 	}
 
-	max = make([]float64, 4)
+	max = 0.0
 	for _, item := range datum.Bezdek {
-		for i, measure := range item.Measures {
-			if measure > max[i] {
-				max[i] = measure
+		for _, measure := range item.Measures {
+			if measure > max {
+				max = measure
 			}
 		}
 	}
 	for _, item := range datum.Bezdek {
 		for i, measure := range item.Measures {
-			item.Measures[i] = measure / max[i]
+			item.Measures[i] = measure / max
 		}
 	}
 }
@@ -150,37 +150,10 @@ func plotData(data *mat.Dense, name string, training []iris.Iris) {
 	if err != nil {
 		panic(err)
 	}
-
-	missed := 0
-	for i := 0; i < rows; i++ {
-		max, match := -1.0, 0
-		for j := 0; j < rows; j++ {
-			if j == i {
-				continue
-			}
-			sumAB, sumAA, sumBB := 0.0, 0.0, 0.0
-			for k := 0; k < cols; k++ {
-				a, b := data.At(i, k), data.At(j, k)
-				sumAB += a * b
-				sumAA += a * a
-				sumBB += b * b
-			}
-			similarity := sumAB / (math.Sqrt(sumAA) * math.Sqrt(sumBB))
-			if similarity > max {
-				max, match = similarity, j
-			}
-		}
-		should := iris.Labels[training[i].Label]
-		found := iris.Labels[training[match].Label]
-		if should != found {
-			missed++
-		}
-	}
-	fmt.Println("missed", missed)
 }
 
 func printTable(out io.Writer, headers []string, rows [][]string) {
-	sizes := make([]int, len(rows))
+	sizes := make([]int, len(headers))
 	for i, header := range headers {
 		sizes[i] = len(header)
 	}
@@ -324,7 +297,14 @@ func varianceReduction(columns int, rows [][]float64, depth int) *Reduction {
 	return &reduction
 }
 
-func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) {
+type Result struct {
+	Mode       Mode
+	Missed     uint
+	Mislabeled uint
+}
+
+func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Result) {
+	result.Mode = mode
 	fmt.Println(mode.String())
 	rnd := rand.New(rand.NewSource(1))
 	random32 := func(a, b float32) float32 {
@@ -370,11 +350,11 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) {
 		switch mode {
 		case ModeNone:
 		case ModeOrthogonality:
-			iterations = 300
+			iterations = 1000
 		case ModeParallel:
 			iterations = 1000
 		case ModeMixed:
-			iterations = 600
+			iterations = 1000
 		case ModeEntropy:
 			iterations = 1000
 		}
@@ -567,14 +547,66 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) {
 	for i := 0; i < Width2; i++ {
 		headers = append(headers, fmt.Sprintf("%d", i))
 	}
-	index := 0
+
+	cutoff := 0.0
+	switch mode {
+	case ModeNone:
+	case ModeOrthogonality:
+		cutoff = 0.01
+	case ModeParallel:
+		cutoff = 0.0004
+	case ModeMixed:
+		cutoff = 0.01
+	case ModeEntropy:
+		cutoff = 0.00005
+	}
+	index, counts := 0, make(map[string]map[uint]uint)
 	for _, item := range items {
 		row := make([]string, 0, Width2+2)
-		row = append(row, training[index].Label, fmt.Sprintf("%d", reduction.Label(0, 0, .01, item)))
+		label, predicted := training[index].Label, reduction.Label(0, 0, cutoff, item)
+		count, ok := counts[label]
+		if !ok {
+			count = make(map[uint]uint)
+			counts[label] = count
+		}
+		count[predicted]++
+		row = append(row, label, fmt.Sprintf("%d", predicted))
 		for _, value := range item {
 			row = append(row, fmt.Sprintf("%f", value))
 		}
 		rows = append(rows, row)
+		index++
+	}
+	type Triple struct {
+		Label     string
+		Predicted uint
+		Count     uint
+	}
+	triples := make([]Triple, 0, 8)
+	for label, count := range counts {
+		for predicted, c := range count {
+			triples = append(triples, Triple{
+				Label:     label,
+				Predicted: predicted,
+				Count:     c,
+			})
+		}
+	}
+	sort.Slice(triples, func(i, j int) bool {
+		return triples[i].Count > triples[j].Count
+	})
+	labels := make(map[string]uint)
+	for _, triple := range triples {
+		if _, ok := labels[triple.Label]; !ok {
+			labels[triple.Label] = triple.Predicted
+		}
+	}
+	index = 0
+	for _, item := range items {
+		label, predicted := training[index].Label, reduction.Label(0, 0, cutoff, item)
+		if labels[label] != predicted {
+			result.Mislabeled++
+		}
 		index++
 	}
 	fmt.Fprintf(out, "# Output of neural network middle layer\n")
@@ -584,9 +616,37 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) {
 	plotData(mat.NewDense(length, Width, points), fmt.Sprintf("embedding_%s.png", mode.String()), training)
 	fmt.Fprintf(out, "# PCA of network middle layer\n")
 	fmt.Fprintf(out, "![embedding of %s](embedding_%s.png?raw=true)]\n", mode.String(), mode.String())
+
+	for i, x := range items {
+		max, match := -1.0, 0
+		for j, y := range items {
+			if j == i {
+				continue
+			}
+			sumAB, sumAA, sumBB := 0.0, 0.0, 0.0
+			for k, a := range x {
+				b := y[k]
+				sumAB += a * b
+				sumAA += a * a
+				sumBB += b * b
+			}
+			similarity := sumAB / (math.Sqrt(sumAA) * math.Sqrt(sumBB))
+			if similarity > max {
+				max, match = similarity, j
+			}
+		}
+		should := iris.Labels[training[i].Label]
+		found := iris.Labels[training[match].Label]
+		if should != found {
+			result.Missed++
+		}
+	}
+
+	return
 }
 
 var (
+	all           = flag.Bool("all", false, "all of the modes")
 	orthogonality = flag.Bool("orthogonality", false, "orthogonality mode")
 	parallel      = flag.Bool("parallel", false, "parallel mode")
 	mixed         = flag.Bool("mixed", false, "mixed mode")
@@ -595,6 +655,8 @@ var (
 
 func main() {
 	flag.Parse()
+
+	results := make([]Result, 0)
 
 	once.Do(load)
 	training := datum.Fisher
@@ -607,17 +669,31 @@ func main() {
 	}
 	plotData(mat.NewDense(length, 4, data), "iris.png", training)
 
-	neuralNetwork(training, 10, ModeNone)
-	if *orthogonality {
-		neuralNetwork(training, 150, ModeOrthogonality)
+	results = append(results, neuralNetwork(training, 10, ModeNone))
+	if *all || *orthogonality {
+		results = append(results, neuralNetwork(training, 150, ModeOrthogonality))
 	}
-	if *parallel {
-		neuralNetwork(training, 150, ModeParallel)
+	if *all || *parallel {
+		results = append(results, neuralNetwork(training, 150, ModeParallel))
 	}
-	if *mixed {
-		neuralNetwork(training, 150, ModeMixed)
+	if *all || *mixed {
+		results = append(results, neuralNetwork(training, 150, ModeMixed))
 	}
-	if *entropy {
-		neuralNetwork(training, 60, ModeEntropy)
+	if *all || *entropy {
+		results = append(results, neuralNetwork(training, 60, ModeEntropy))
 	}
+
+	out, err := os.Create("README.md")
+	if err != nil {
+		panic(err)
+	}
+	defer out.Close()
+
+	headers, rows := make([]string, 0, Width2+2), make([][]string, 0, len(results))
+	headers = append(headers, "mode", "missed", "mislabeled")
+	for _, result := range results {
+		row := []string{result.Mode.String(), fmt.Sprintf("%d", result.Missed), fmt.Sprintf("%d", result.Mislabeled)}
+		rows = append(rows, row)
+	}
+	printTable(out, headers, rows)
 }
