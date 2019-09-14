@@ -30,6 +30,7 @@ const (
 	ModeParallel
 	ModeMixed
 	ModeEntropy
+	ModeVariance
 )
 
 func (m Mode) String() string {
@@ -44,6 +45,8 @@ func (m Mode) String() string {
 		return "parallel"
 	case ModeEntropy:
 		return "entropy"
+	case ModeVariance:
+		return "variance"
 	}
 	return "unknown"
 }
@@ -268,6 +271,10 @@ func variance(column int, rows [][]float64) float64 {
 }
 
 func varianceReduction(columns int, rows [][]float64, depth int) *Reduction {
+	if len(rows) == 0 {
+		return nil
+	}
+
 	reduction := Reduction{}
 	for k := 0; k < columns; k++ {
 		sort.Slice(rows, func(i, j int) bool {
@@ -357,6 +364,8 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 			iterations = 1000
 		case ModeEntropy:
 			iterations = 1000
+		case ModeVariance:
+			iterations = 10000
 		}
 
 		points := make(plotter.XYs, 0, iterations)
@@ -496,6 +505,14 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 		weight.X = append(weight.X, .5)
 		cost = tf32.Add(cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Entropy(tf32.Softmax(tf32.T(l2))))))
 		learn(mode, true)
+	case ModeVariance:
+		learn(ModeNone, false)
+		one := tf32.NewV(1)
+		one.X = append(one.X, 1)
+		weight := tf32.NewV(1)
+		weight.X = append(weight.X, 1)
+		cost = tf32.Add(cost, tf32.Hadamard(weight.Meta(), tf32.Sub(one.Meta(), tf32.Avg(tf32.Variance(tf32.T(l2))))))
+		learn(mode, true)
 	}
 
 	input = tf32.NewV(4)
@@ -528,6 +545,21 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 	fmt.Fprintf(out, "# Training cost vs epochs\n")
 	fmt.Fprintf(out, "![epochs of %s](epochs_%s.png?raw=true)]\n\n", mode.String(), mode.String())
 
+	depth := 2
+	switch mode {
+	case ModeNone:
+		depth = 2
+	case ModeOrthogonality:
+		depth = 2
+	case ModeParallel:
+		depth = 2
+	case ModeMixed:
+		depth = 2
+	case ModeEntropy:
+		depth = 2
+	case ModeVariance:
+		depth = 1
+	}
 	items := make([][]float64, 0, length)
 	for i := 0; i < len(points); i += Width2 {
 		item := make([]float64, 0, Width2)
@@ -536,7 +568,7 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 		}
 		items = append(items, item)
 	}
-	reduction := varianceReduction(Width2, items, 2)
+	reduction := varianceReduction(Width2, items, depth)
 	fmt.Fprintf(out, "# Decision tree\n")
 	fmt.Fprintf(out, "```go\n")
 	fmt.Fprintf(out, "%s\n", reduction.String())
@@ -551,6 +583,7 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 	cutoff := 0.0
 	switch mode {
 	case ModeNone:
+		cutoff = 0.0
 	case ModeOrthogonality:
 		cutoff = 0.01
 	case ModeParallel:
@@ -559,6 +592,8 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 		cutoff = 0.01
 	case ModeEntropy:
 		cutoff = 0.00005
+	case ModeVariance:
+		cutoff = 0.0
 	}
 	index, counts := 0, make(map[string]map[uint]uint)
 	for _, item := range items {
@@ -651,6 +686,7 @@ var (
 	parallel      = flag.Bool("parallel", false, "parallel mode")
 	mixed         = flag.Bool("mixed", false, "mixed mode")
 	entropy       = flag.Bool("entropy", false, "entropy mode")
+	varianceMode  = flag.Bool("variance", false, "variance mode")
 )
 
 func main() {
@@ -681,6 +717,9 @@ func main() {
 	}
 	if *all || *entropy {
 		results = append(results, neuralNetwork(training, 60, ModeEntropy))
+	}
+	if *all || *varianceMode {
+		results = append(results, neuralNetwork(training, 150, ModeVariance))
 	}
 
 	out, err := os.Create("README.md")
