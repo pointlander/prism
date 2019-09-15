@@ -304,6 +304,122 @@ func varianceReduction(columns int, rows [][]float64, depth int) *Reduction {
 	return &reduction
 }
 
+type Network struct {
+	*rand.Rand
+	BatchSize     int
+	Input, Output tf32.V
+	W, B          [4]tf32.V
+	Parameters    []*tf32.V
+	Ones          tf32.V
+	L             [4]tf32.Meta
+	Cost          tf32.Meta
+}
+
+func NewNetwork(batchSize int) *Network {
+	n := Network{
+		Rand:       rand.New(rand.NewSource(1)),
+		BatchSize:  batchSize,
+		Parameters: make([]*tf32.V, 0, 8),
+	}
+	n.Input, n.Output = tf32.NewV(4, batchSize), tf32.NewV(4, batchSize)
+	n.W[0], n.B[0] = tf32.NewV(4, Width), tf32.NewV(Width)
+	n.W[1], n.B[1] = tf32.NewV(Width, Width2), tf32.NewV(Width2)
+	n.W[2], n.B[2] = tf32.NewV(Width2, Width3), tf32.NewV(Width3)
+	n.W[3], n.B[3] = tf32.NewV(Width3, 4), tf32.NewV(4)
+	for i := range n.W {
+		n.Parameters = append(n.Parameters, &n.W[i], &n.B[i])
+	}
+	for _, p := range n.Parameters {
+		for i := 0; i < cap(p.X); i++ {
+			p.X = append(p.X, n.Random32(-1, 1))
+		}
+	}
+
+	n.Ones = tf32.NewV(batchSize)
+	for i := 0; i < cap(n.Ones.X); i++ {
+		n.Ones.X = append(n.Ones.X, 1)
+	}
+	last := n.Input.Meta()
+	for i := range n.L {
+		n.L[i] = tf32.Sigmoid(tf32.Add(tf32.Mul(n.W[i].Meta(), last), n.B[i].Meta()))
+		last = n.L[i]
+	}
+	n.Cost = tf32.Avg(tf32.Sub(n.Ones.Meta(), tf32.Similarity(last, n.Output.Meta())))
+	//cost := tf32.Avg(tf32.Quadratic(last, output.Meta()))
+	return &n
+}
+
+func (n *Network) Random32(a, b float32) float32 {
+	return (b-a)*n.Float32() + a
+}
+
+func (n *Network) Train(training []iris.Iris, iterations int) plotter.XYs {
+	length := len(training)
+	data := make([]*iris.Iris, 0, length)
+	for i := range training {
+		data = append(data, &training[i])
+	}
+
+	points := make(plotter.XYs, 0, iterations)
+	for i := 0; i < iterations; i++ {
+		for i := range data {
+			j := i + n.Intn(length-i)
+			data[i], data[j] = data[j], data[i]
+		}
+		total := float32(0.0)
+		for j := 0; j < length; j += n.BatchSize {
+			for _, p := range n.Parameters {
+				p.Zero()
+			}
+			n.Input.Zero()
+			n.Output.Zero()
+			n.Ones.Zero()
+
+			values := make([]float32, 0, 4*n.BatchSize)
+			for k := 0; k < n.BatchSize; k++ {
+				index := (j + k) % length
+				for _, measure := range data[index].Measures {
+					values = append(values, float32(measure))
+				}
+			}
+			n.Input.Set(values)
+			n.Output.Set(values)
+			total += tf32.Gradient(n.Cost).X[0]
+
+			norm := float32(0)
+			for k, p := range n.Parameters {
+				for l, d := range p.D {
+					if math.IsNaN(float64(d)) {
+						fmt.Println(d, k, l)
+						return points
+					} else if math.IsInf(float64(d), 0) {
+						fmt.Println(d, k, l)
+						return points
+					}
+					norm += d * d
+				}
+			}
+			norm = float32(math.Sqrt(float64(norm)))
+			if norm > 1 {
+				scaling := 1 / norm
+				for _, p := range n.Parameters {
+					for l, d := range p.D {
+						p.X[l] -= Eta * d * scaling
+					}
+				}
+			} else {
+				for _, p := range n.Parameters {
+					for l, d := range p.D {
+						p.X[l] -= Eta * d
+					}
+				}
+			}
+		}
+		points = append(points, plotter.XY{X: float64(i), Y: float64(total)})
+	}
+	return points
+}
+
 type Result struct {
 	Mode       Mode
 	Missed     uint
@@ -313,46 +429,11 @@ type Result struct {
 func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Result) {
 	result.Mode = mode
 	fmt.Println(mode.String())
-	rnd := rand.New(rand.NewSource(1))
-	random32 := func(a, b float32) float32 {
-		return (b-a)*rnd.Float32() + a
-	}
-	input, output := tf32.NewV(4, batchSize), tf32.NewV(4, batchSize)
-	w1, b1, w2, b2 := tf32.NewV(4, Width), tf32.NewV(Width), tf32.NewV(Width, Width2), tf32.NewV(Width2)
-	w3, b3, w4, b4 := tf32.NewV(Width2, Width3), tf32.NewV(Width3), tf32.NewV(Width3, 4), tf32.NewV(4)
-	parameters := []*tf32.V{&w1, &b1, &w2, &b2, &w3, &b3, &w4, &b4}
-	for _, p := range parameters {
-		for i := 0; i < cap(p.X); i++ {
-			p.X = append(p.X, random32(-1, 1))
-		}
-	}
-	ones := tf32.NewV(batchSize)
-	for i := 0; i < cap(ones.X); i++ {
-		ones.X = append(ones.X, 1)
-	}
-	l1 := tf32.Sigmoid(tf32.Add(tf32.Mul(w1.Meta(), input.Meta()), b1.Meta()))
-	l2 := tf32.Sigmoid(tf32.Add(tf32.Mul(w2.Meta(), l1), b2.Meta()))
-	l3 := tf32.Sigmoid(tf32.Add(tf32.Mul(w3.Meta(), l2), b3.Meta()))
-	l4 := tf32.Sigmoid(tf32.Add(tf32.Mul(w4.Meta(), l3), b4.Meta()))
-	cost := tf32.Avg(tf32.Sub(ones.Meta(), tf32.Similarity(l4, output.Meta())))
-	//cost := tf32.Avg(tf32.Quadratic(l4, output.Meta()))
+
+	network := NewNetwork(batchSize)
 
 	length := len(training)
 	learn := func(mode Mode, makePlot bool) {
-		data := make([]*iris.Iris, 0, length)
-		for i := range training {
-			data = append(data, &training[i])
-		}
-
-		p, err := plot.New()
-		if err != nil {
-			panic(err)
-		}
-
-		p.Title.Text = mode.String()
-		p.X.Label.Text = "epochs"
-		p.Y.Label.Text = "cost"
-
 		iterations := 1000
 		switch mode {
 		case ModeNone:
@@ -367,65 +448,16 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 		case ModeVariance:
 			iterations = 10000
 		}
+		points := network.Train(training, iterations)
 
-		points := make(plotter.XYs, 0, iterations)
-
-		for i := 0; i < iterations; i++ {
-			for i := range data {
-				j := i + rnd.Intn(length-i)
-				data[i], data[j] = data[j], data[i]
-			}
-			total := float32(0.0)
-			for j := 0; j < length; j += batchSize {
-				for _, p := range parameters {
-					p.Zero()
-				}
-				input.Zero()
-				output.Zero()
-				ones.Zero()
-
-				values := make([]float32, 0, 4*batchSize)
-				for k := 0; k < batchSize; k++ {
-					index := (j + k) % length
-					for _, measure := range data[index].Measures {
-						values = append(values, float32(measure))
-					}
-				}
-				input.Set(values)
-				output.Set(values)
-				total += tf32.Gradient(cost).X[0]
-
-				norm := float32(0)
-				for k, p := range parameters {
-					for l, d := range p.D {
-						if math.IsNaN(float64(d)) {
-							fmt.Println(d, k, l)
-							return
-						} else if math.IsInf(float64(d), 0) {
-							fmt.Println(d, k, l)
-							return
-						}
-						norm += d * d
-					}
-				}
-				norm = float32(math.Sqrt(float64(norm)))
-				if norm > 1 {
-					scaling := 1 / norm
-					for _, p := range parameters {
-						for l, d := range p.D {
-							p.X[l] -= Eta * d * scaling
-						}
-					}
-				} else {
-					for _, p := range parameters {
-						for l, d := range p.D {
-							p.X[l] -= Eta * d
-						}
-					}
-				}
-			}
-			points = append(points, plotter.XY{X: float64(i), Y: float64(total)})
+		p, err := plot.New()
+		if err != nil {
+			panic(err)
 		}
+
+		p.Title.Text = mode.String()
+		p.X.Label.Text = "epochs"
+		p.Y.Label.Text = "cost"
 
 		scatter, err := plotter.NewScatter(points)
 		if err != nil {
@@ -450,7 +482,7 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 		learn(ModeNone, false)
 		weight := tf32.NewV(1)
 		weight.X = append(weight.X, 1)
-		cost = tf32.Add(cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Abs(tf32.Orthogonality(l2)))))
+		network.Cost = tf32.Add(network.Cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Abs(tf32.Orthogonality(network.L[1])))))
 		learn(mode, true)
 	case ModeParallel:
 		learn(ModeNone, false)
@@ -460,7 +492,7 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 		}
 		weight := tf32.NewV(1)
 		weight.X = append(weight.X, 1)
-		cost = tf32.Add(cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Sub(ones.Meta(), tf32.Orthogonality(l2)))))
+		network.Cost = tf32.Add(network.Cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Sub(ones.Meta(), tf32.Orthogonality(network.L[1])))))
 		learn(mode, true)
 	case ModeMixed:
 		learn(ModeNone, false)
@@ -497,13 +529,13 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 		}
 		weight := tf32.NewV(1)
 		weight.X = append(weight.X, 1)
-		cost = tf32.Add(cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Abs(tf32.Sub(mask.Meta(), tf32.Orthogonality(l2))))))
+		network.Cost = tf32.Add(network.Cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Abs(tf32.Sub(mask.Meta(), tf32.Orthogonality(network.L[1]))))))
 		learn(mode, true)
 	case ModeEntropy:
 		learn(ModeNone, false)
 		weight := tf32.NewV(1)
 		weight.X = append(weight.X, .5)
-		cost = tf32.Add(cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Entropy(tf32.Softmax(tf32.T(l2))))))
+		network.Cost = tf32.Add(network.Cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Entropy(tf32.Softmax(tf32.T(network.L[1]))))))
 		learn(mode, true)
 	case ModeVariance:
 		learn(ModeNone, false)
@@ -511,13 +543,13 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 		one.X = append(one.X, 1)
 		weight := tf32.NewV(1)
 		weight.X = append(weight.X, 1)
-		cost = tf32.Add(cost, tf32.Hadamard(weight.Meta(), tf32.Sub(one.Meta(), tf32.Avg(tf32.Variance(tf32.T(l2))))))
+		network.Cost = tf32.Add(network.Cost, tf32.Hadamard(weight.Meta(), tf32.Sub(one.Meta(), tf32.Avg(tf32.Variance(tf32.T(network.L[1]))))))
 		learn(mode, true)
 	}
 
-	input = tf32.NewV(4)
-	l1 = tf32.Sigmoid(tf32.Add(tf32.Mul(w1.Meta(), input.Meta()), b1.Meta()))
-	l2 = tf32.Sigmoid(tf32.Add(tf32.Mul(w2.Meta(), l1), b2.Meta()))
+	input := tf32.NewV(4)
+	l1 := tf32.Sigmoid(tf32.Add(tf32.Mul(network.W[0].Meta(), input.Meta()), network.B[0].Meta()))
+	l2 := tf32.Sigmoid(tf32.Add(tf32.Mul(network.W[1].Meta(), l1), network.B[1].Meta()))
 	tf32.Static.InferenceOnly = true
 	defer func() {
 		tf32.Static.InferenceOnly = false
@@ -630,16 +662,18 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 	sort.Slice(triples, func(i, j int) bool {
 		return triples[i].Count > triples[j].Count
 	})
-	labels := make(map[string]uint)
+	labels, used := make(map[string]uint), make(map[uint]bool)
 	for _, triple := range triples {
 		if _, ok := labels[triple.Label]; !ok {
-			labels[triple.Label] = triple.Predicted
+			if !used[triple.Predicted] {
+				labels[triple.Label], used[triple.Predicted] = triple.Predicted, true
+			}
 		}
 	}
 	index = 0
 	for _, item := range items {
 		label, predicted := training[index].Label, reduction.Label(0, 0, cutoff, item)
-		if labels[label] != predicted {
+		if l, ok := labels[label]; !ok || l != predicted {
 			result.Mislabeled++
 		}
 		index++
