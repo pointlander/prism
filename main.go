@@ -7,7 +7,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"sort"
 	"sync"
 
 	"gonum.org/v1/gonum/mat"
@@ -25,6 +24,7 @@ type Mode int
 
 const (
 	ModeNone Mode = iota
+	ModeRaw
 	ModeOrthogonality
 	ModeParallel
 	ModeMixed
@@ -36,6 +36,8 @@ func (m Mode) String() string {
 	switch m {
 	case ModeNone:
 		return "none"
+	case ModeRaw:
+		return "raw"
 	case ModeOrthogonality:
 		return "orthogonality"
 	case ModeMixed:
@@ -103,7 +105,7 @@ var colors = [...]color.RGBA{
 	{R: 0x00, G: 0x00, B: 0xff, A: 255},
 }
 
-func plotData(embeddings Embeddings, name string) {
+func plotData(embeddings *Embeddings, name string) {
 	length := len(embeddings.Embeddings)
 	values := make([]float64, 0, Width2*length)
 	for _, embedding := range embeddings.Embeddings {
@@ -212,9 +214,9 @@ func printTable(out io.Writer, headers []string, rows [][]string) {
 }
 
 type Result struct {
-	Mode       Mode
-	Missed     uint
-	Mislabeled uint
+	Mode        Mode
+	Consistency uint
+	Mislabeled  uint
 }
 
 func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Result) {
@@ -340,15 +342,6 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 
 	embeddings := network.Embeddings(training)
 
-	out, err := os.Create(fmt.Sprintf("result_%s.md", mode.String()))
-	if err != nil {
-		panic(err)
-	}
-	defer out.Close()
-
-	fmt.Fprintf(out, "# Training cost vs epochs\n")
-	fmt.Fprintf(out, "![epochs of %s](epochs_%s.png?raw=true)]\n\n", mode.String(), mode.String())
-
 	depth := 2
 	switch mode {
 	case ModeNone:
@@ -366,16 +359,6 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 	}
 	cp := embeddings.Copy()
 	reduction := cp.VarianceReduction(depth)
-	fmt.Fprintf(out, "# Decision tree\n")
-	fmt.Fprintf(out, "```go\n")
-	fmt.Fprintf(out, "%s\n", reduction.String())
-	fmt.Fprintf(out, "```\n\n")
-
-	headers, rows := make([]string, 0, Width2+2), make([][]string, 0, length)
-	headers = append(headers, "label", "cluster")
-	for i := 0; i < Width2; i++ {
-		headers = append(headers, fmt.Sprintf("%d", i))
-	}
 
 	cutoff := 0.0
 	switch mode {
@@ -392,91 +375,12 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 	case ModeVariance:
 		cutoff = 0.0
 	}
-	index, counts := 0, make(map[string]map[uint]uint)
-	for _, item := range embeddings.Embeddings {
-		row := make([]string, 0, Width2+2)
-		label, predicted := item.Label, reduction.Label(0, 0, cutoff, item.Features)
-		count, ok := counts[label]
-		if !ok {
-			count = make(map[uint]uint)
-			counts[label] = count
-		}
-		count[predicted]++
-		row = append(row, label, fmt.Sprintf("%d", predicted))
-		for _, value := range item.Features {
-			row = append(row, fmt.Sprintf("%f", value))
-		}
-		rows = append(rows, row)
-		index++
-	}
-	type Triple struct {
-		Label     string
-		Predicted uint
-		Count     uint
-	}
-	triples := make([]Triple, 0, 8)
-	for label, count := range counts {
-		for predicted, c := range count {
-			triples = append(triples, Triple{
-				Label:     label,
-				Predicted: predicted,
-				Count:     c,
-			})
-		}
-	}
-	sort.Slice(triples, func(i, j int) bool {
-		return triples[i].Count > triples[j].Count
-	})
-	labels, used := make(map[string]uint), make(map[uint]bool)
-	for _, triple := range triples {
-		if _, ok := labels[triple.Label]; !ok {
-			if !used[triple.Predicted] {
-				labels[triple.Label], used[triple.Predicted] = triple.Predicted, true
-			}
-		}
-	}
-	index = 0
-	for _, item := range embeddings.Embeddings {
-		label, predicted := item.Label, reduction.Label(0, 0, cutoff, item.Features)
-		if l, ok := labels[label]; !ok || l != predicted {
-			result.Mislabeled++
-		}
-		index++
-	}
-	fmt.Fprintf(out, "# Output of neural network middle layer\n")
-	printTable(out, headers, rows)
-	fmt.Fprintf(out, "\n")
+	embeddings.PrintTable(mode, cutoff, reduction)
 
-	plotData(embeddings, fmt.Sprintf("embedding_%s.png", mode.String()))
-	fmt.Fprintf(out, "# PCA of network middle layer\n")
-	fmt.Fprintf(out, "![embedding of %s](embedding_%s.png?raw=true)]\n", mode.String(), mode.String())
+	result.Mislabeled = embeddings.GetMislabeled(cutoff, reduction)
+	result.Consistency = embeddings.GetConsistency()
 
-	for i, x := range embeddings.Embeddings {
-		max, match := -1.0, 0
-		for j, y := range embeddings.Embeddings {
-			if j == i {
-				continue
-			}
-			sumAB, sumAA, sumBB := 0.0, 0.0, 0.0
-			for k, a := range x.Features {
-				b := y.Features[k]
-				sumAB += a * b
-				sumAA += a * a
-				sumBB += b * b
-			}
-			similarity := sumAB / (math.Sqrt(sumAA) * math.Sqrt(sumBB))
-			if similarity > max {
-				max, match = similarity, j
-			}
-		}
-		should := iris.Labels[training[i].Label]
-		found := iris.Labels[training[match].Label]
-		if should != found {
-			result.Missed++
-		}
-	}
-
-	return
+	return result
 }
 
 var (
@@ -494,6 +398,8 @@ func main() {
 	once.Do(load)
 	training := datum.Fisher
 
+	results := make([]Result, 0)
+	fmt.Println(ModeRaw.String())
 	length := len(training)
 	embeddings := Embeddings{
 		Columns:    4,
@@ -509,9 +415,16 @@ func main() {
 		}
 		embeddings.Embeddings = append(embeddings.Embeddings, embedding)
 	}
-	plotData(embeddings, "iris.png")
+	cp := embeddings.Copy()
+	reduction := cp.VarianceReduction(2)
+	embeddings.PrintTable(ModeRaw, 0, reduction)
+	result := Result{
+		Mode:        ModeRaw,
+		Mislabeled:  embeddings.GetMislabeled(0, reduction),
+		Consistency: embeddings.GetConsistency(),
+	}
+	results = append(results, result)
 
-	results := make([]Result, 0)
 	results = append(results, neuralNetwork(training, 10, ModeNone))
 	if *all || *orthogonality {
 		results = append(results, neuralNetwork(training, 150, ModeOrthogonality))
@@ -536,9 +449,9 @@ func main() {
 	defer out.Close()
 
 	headers, rows := make([]string, 0, Width2+2), make([][]string, 0, len(results))
-	headers = append(headers, "mode", "missed", "mislabeled")
+	headers = append(headers, "mode", "consistency", "mislabeled")
 	for _, result := range results {
-		row := []string{result.Mode.String(), fmt.Sprintf("%d", result.Missed), fmt.Sprintf("%d", result.Mislabeled)}
+		row := []string{result.Mode.String(), fmt.Sprintf("%d", result.Consistency), fmt.Sprintf("%d", result.Mislabeled)}
 		rows = append(rows, row)
 	}
 	printTable(out, headers, rows)

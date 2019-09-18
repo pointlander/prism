@@ -2,7 +2,11 @@ package main
 
 import (
 	"fmt"
+	"math"
+	"os"
 	"sort"
+
+	"github.com/pointlander/datum/iris"
 )
 
 // Embeddings is a set of embeddings
@@ -88,6 +92,123 @@ func (e *Embeddings) VarianceReduction(depth int) *Reduction {
 	}
 	reduction.Left, reduction.Right = left.VarianceReduction(depth), right.VarianceReduction(depth)
 	return &reduction
+}
+
+// PrintTable prints a table of embeddings
+func (e *Embeddings) PrintTable(mode Mode, cutoff float64, reduction *Reduction) {
+	out, err := os.Create(fmt.Sprintf("result_%s.md", mode.String()))
+	if err != nil {
+		panic(err)
+	}
+	defer out.Close()
+
+	fmt.Fprintf(out, "# Training cost vs epochs\n")
+	fmt.Fprintf(out, "![epochs of %s](epochs_%s.png?raw=true)]\n\n", mode.String(), mode.String())
+
+	fmt.Fprintf(out, "# Decision tree\n")
+	fmt.Fprintf(out, "```go\n")
+	fmt.Fprintf(out, "%s\n", reduction.String())
+	fmt.Fprintf(out, "```\n\n")
+
+	headers, rows := make([]string, 0, Width2+2), make([][]string, 0, len(e.Embeddings))
+	headers = append(headers, "label", "cluster")
+	for i := 0; i < e.Columns; i++ {
+		headers = append(headers, fmt.Sprintf("%d", i))
+	}
+
+	for _, item := range e.Embeddings {
+		row := make([]string, 0, e.Columns+2)
+		label, predicted := item.Label, reduction.Label(0, 0, cutoff, item.Features)
+		row = append(row, label, fmt.Sprintf("%d", predicted))
+		for _, value := range item.Features {
+			row = append(row, fmt.Sprintf("%f", value))
+		}
+		rows = append(rows, row)
+	}
+
+	fmt.Fprintf(out, "# Output of neural network middle layer\n")
+	printTable(out, headers, rows)
+	fmt.Fprintf(out, "\n")
+
+	plotData(e, fmt.Sprintf("embedding_%s.png", mode.String()))
+	fmt.Fprintf(out, "# PCA of network middle layer\n")
+	fmt.Fprintf(out, "![embedding of %s](embedding_%s.png?raw=true)]\n", mode.String(), mode.String())
+}
+
+// GetMislabeled computes how many embeddings are mislabeled
+func (e *Embeddings) GetMislabeled(cutoff float64, reduction *Reduction) (mislabeled uint) {
+	counts := make(map[string]map[uint]uint)
+	for _, item := range e.Embeddings {
+		label, predicted := item.Label, reduction.Label(0, 0, cutoff, item.Features)
+		count, ok := counts[label]
+		if !ok {
+			count = make(map[uint]uint)
+			counts[label] = count
+		}
+		count[predicted]++
+	}
+	type Triple struct {
+		Label     string
+		Predicted uint
+		Count     uint
+	}
+	triples := make([]Triple, 0, 8)
+	for label, count := range counts {
+		for predicted, c := range count {
+			triples = append(triples, Triple{
+				Label:     label,
+				Predicted: predicted,
+				Count:     c,
+			})
+		}
+	}
+	sort.Slice(triples, func(i, j int) bool {
+		return triples[i].Count > triples[j].Count
+	})
+	labels, used := make(map[string]uint), make(map[uint]bool)
+	for _, triple := range triples {
+		if _, ok := labels[triple.Label]; !ok {
+			if !used[triple.Predicted] {
+				labels[triple.Label], used[triple.Predicted] = triple.Predicted, true
+			}
+		}
+	}
+	for _, item := range e.Embeddings {
+		label, predicted := item.Label, reduction.Label(0, 0, cutoff, item.Features)
+		if l, ok := labels[label]; !ok || l != predicted {
+			mislabeled++
+		}
+	}
+	return mislabeled
+}
+
+// GetConsistency returns zero if the data is self consistent
+func (e *Embeddings) GetConsistency() (consistency uint) {
+	for i, x := range e.Embeddings {
+		max, match := -1.0, 0
+		for j, y := range e.Embeddings {
+			if j == i {
+				continue
+			}
+			sumAB, sumAA, sumBB := 0.0, 0.0, 0.0
+			for k, a := range x.Features {
+				b := y.Features[k]
+				sumAB += a * b
+				sumAA += a * a
+				sumBB += b * b
+			}
+			similarity := sumAB / (math.Sqrt(sumAA) * math.Sqrt(sumBB))
+			if similarity > max {
+				max, match = similarity, j
+			}
+		}
+		should := iris.Labels[e.Embeddings[i].Label]
+		found := iris.Labels[e.Embeddings[match].Label]
+		if should != found {
+			consistency++
+		}
+	}
+	return consistency
 }
 
 // Reduction is the result of variance reduction
