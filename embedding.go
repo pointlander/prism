@@ -96,7 +96,7 @@ func (e *Embeddings) VarianceReduction(depth int) *Reduction {
 
 // PrintTable prints a table of embeddings
 func (e *Embeddings) PrintTable(mode Mode, cutoff float64, reduction *Reduction) {
-	out, err := os.Create(fmt.Sprintf("result_%s.md", mode.String()))
+	out, err := os.Create(fmt.Sprintf("results/result_%s.md", mode.String()))
 	if err != nil {
 		panic(err)
 	}
@@ -130,7 +130,7 @@ func (e *Embeddings) PrintTable(mode Mode, cutoff float64, reduction *Reduction)
 	printTable(out, headers, rows)
 	fmt.Fprintf(out, "\n")
 
-	plotData(e, fmt.Sprintf("embedding_%s.png", mode.String()))
+	plotData(e, fmt.Sprintf("results/embedding_%s.png", mode.String()))
 	fmt.Fprintf(out, "# PCA of network middle layer\n")
 	fmt.Fprintf(out, "![embedding of %s](embedding_%s.png?raw=true)]\n", mode.String(), mode.String())
 }

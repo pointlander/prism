@@ -261,7 +261,7 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 		p.Add(scatter)
 
 		if makePlot {
-			err = p.Save(8*vg.Inch, 8*vg.Inch, fmt.Sprintf("epochs_%s.png", mode.String()))
+			err = p.Save(8*vg.Inch, 8*vg.Inch, fmt.Sprintf("results/epochs_%s.png", mode.String()))
 			if err != nil {
 				panic(err)
 			}
@@ -394,6 +394,11 @@ var (
 
 func main() {
 	flag.Parse()
+
+	err := os.MkdirAll("results", 0700)
+	if err != nil {
+		panic(err)
+	}
 
 	once.Do(load)
 	training := datum.Fisher
