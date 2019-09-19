@@ -45,50 +45,81 @@ func (e *Embeddings) Variance(column int) float64 {
 	return variance / n
 }
 
+// PivotVariance computes the variance for the left and right features with column
+func (e *Embeddings) PivotVariance(column int, pivot float64) (left, right float64) {
+	nLeft, nRight, sumLeft, sumRight := 0, 0, 0.0, 0.0
+	for _, row := range e.Embeddings {
+		if value := row.Features[column]; value > pivot {
+			nRight++
+			sumRight += value
+		} else {
+			nLeft++
+			sumLeft += value
+		}
+	}
+	averageLeft, averageRight := sumLeft, sumRight
+	if nLeft != 0 {
+		averageLeft /= float64(nLeft)
+	}
+	if nRight != 0 {
+		averageRight /= float64(nRight)
+	}
+	for _, row := range e.Embeddings {
+		if value := row.Features[column]; value > pivot {
+			v := value - averageRight
+			right += v * v
+		} else {
+			v := value - averageLeft
+			left += v * v
+		}
+	}
+	if nLeft != 0 {
+		left /= float64(nLeft)
+	}
+	if nRight != 0 {
+		right /= float64(nRight)
+	}
+	return left, right
+}
+
 // VarianceReduction implements variance reduction algorithm
 func (e *Embeddings) VarianceReduction(depth int) *Reduction {
-	if len(e.Embeddings) == 0 {
+	length := len(e.Embeddings)
+	if length == 0 {
 		return nil
 	}
 
 	reduction := Reduction{}
 	for k := 0; k < e.Columns; k++ {
-		sort.Slice(e.Embeddings, func(i, j int) bool {
-			return e.Embeddings[i].Features[k] < e.Embeddings[j].Features[k]
-		})
 		total := e.Variance(k)
-		for i, row := range e.Embeddings[:len(e.Embeddings)-1] {
-			left := Embeddings{
-				Columns:    e.Columns,
-				Embeddings: e.Embeddings[:i+1],
-			}
-			right := Embeddings{
-				Columns:    e.Columns,
-				Embeddings: e.Embeddings[i+1:],
-			}
-			a, b := left.Variance(k), right.Variance(k)
+		for _, row := range e.Embeddings {
+			pivot := row.Features[k]
+			a, b := e.PivotVariance(k, pivot)
 			if cost := total - (a + b); cost > reduction.Max {
-				reduction.Max, reduction.Row, reduction.Column, reduction.Pivot = cost, i, k, row.Features[k]
+				reduction.Max, reduction.Column, reduction.Pivot = cost, k, pivot
 			}
 		}
 	}
+
 	depth--
 	if depth <= 0 {
 		return &reduction
 	}
 
-	rowscp := make([]Embedding, len(e.Embeddings))
-	copy(rowscp, e.Embeddings)
-	sort.Slice(rowscp, func(i, j int) bool {
-		return rowscp[i].Features[reduction.Column] < rowscp[j].Features[reduction.Column]
-	})
 	left := Embeddings{
 		Columns:    e.Columns,
-		Embeddings: rowscp[:reduction.Row+1],
+		Embeddings: make([]Embedding, 0, length),
 	}
 	right := Embeddings{
 		Columns:    e.Columns,
-		Embeddings: rowscp[reduction.Row+1:],
+		Embeddings: make([]Embedding, 0, length),
+	}
+	for _, row := range e.Embeddings {
+		if row.Features[reduction.Column] > reduction.Pivot {
+			right.Embeddings = append(right.Embeddings, row)
+		} else {
+			left.Embeddings = append(left.Embeddings, row)
+		}
 	}
 	reduction.Left, reduction.Right = left.VarianceReduction(depth), right.VarianceReduction(depth)
 	return &reduction
@@ -213,7 +244,7 @@ func (e *Embeddings) GetConsistency() (consistency uint) {
 
 // Reduction is the result of variance reduction
 type Reduction struct {
-	Row, Column int
+	Column      int
 	Pivot       float64
 	Max         float64
 	Left, Right *Reduction

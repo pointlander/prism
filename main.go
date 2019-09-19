@@ -357,8 +357,7 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 	case ModeVariance:
 		depth = 2
 	}
-	cp := embeddings.Copy()
-	reduction := cp.VarianceReduction(depth)
+	reduction := embeddings.VarianceReduction(depth)
 
 	cutoff := 0.0
 	switch mode {
@@ -420,8 +419,7 @@ func main() {
 		}
 		embeddings.Embeddings = append(embeddings.Embeddings, embedding)
 	}
-	cp := embeddings.Copy()
-	reduction := cp.VarianceReduction(2)
+	reduction := embeddings.VarianceReduction(2)
 	embeddings.PrintTable(ModeRaw, 0, reduction)
 	result := Result{
 		Mode:        ModeRaw,
