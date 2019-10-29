@@ -142,6 +142,7 @@ func (n *Network) Embeddings(training []iris.Iris) Embeddings {
 	}()
 	embeddings := Embeddings{
 		Columns:    Width2,
+		Network:    n,
 		Embeddings: make([]Embedding, 0, len(training)),
 	}
 	for i := range training {
@@ -151,7 +152,8 @@ func (n *Network) Embeddings(training []iris.Iris) Embeddings {
 		}
 		input.Set(values)
 		embedding := Embedding{
-			Label:    training[i].Label,
+			Iris:     training[i],
+			Source:   i,
 			Features: make([]float64, 0, Width2),
 		}
 		l2(func(a *tf32.V) {

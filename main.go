@@ -215,6 +215,7 @@ func printTable(out io.Writer, headers []string, rows [][]string) {
 
 type Result struct {
 	Mode        Mode
+	Reduction   *Reduction
 	Consistency uint
 	Mislabeled  uint
 }
@@ -357,27 +358,7 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 	case ModeVariance:
 		depth = 2
 	}
-	reduction := embeddings.VarianceReduction(depth)
-
-	cutoff := 0.0
-	switch mode {
-	case ModeNone:
-		cutoff = 0.0006
-	case ModeOrthogonality:
-		cutoff = 0.01
-	case ModeParallel:
-		cutoff = 0.0004
-	case ModeMixed:
-		cutoff = 0.01
-	case ModeEntropy:
-		cutoff = 0.0
-	case ModeVariance:
-		cutoff = 0.0
-	}
-	embeddings.PrintTable(mode, cutoff, reduction)
-
-	result.Mislabeled = embeddings.GetMislabeled(cutoff, reduction)
-	result.Consistency = embeddings.GetConsistency()
+	result.Reduction = embeddings.VarianceReduction(depth, 0, 0)
 
 	return result
 }
@@ -411,7 +392,7 @@ func main() {
 	}
 	for _, item := range training {
 		embedding := Embedding{
-			Label:    item.Label,
+			Iris:     item,
 			Features: make([]float64, 0, 4),
 		}
 		for _, measure := range item.Measures {
@@ -419,37 +400,72 @@ func main() {
 		}
 		embeddings.Embeddings = append(embeddings.Embeddings, embedding)
 	}
-	reduction := embeddings.VarianceReduction(2)
-	embeddings.PrintTable(ModeRaw, 0, reduction)
-	result := Result{
-		Mode:        ModeRaw,
-		Mislabeled:  embeddings.GetMislabeled(0, reduction),
-		Consistency: embeddings.GetConsistency(),
-	}
-	results = append(results, result)
-
-	results = append(results, neuralNetwork(training, 10, ModeNone))
-	if *all || *orthogonality {
-		results = append(results, neuralNetwork(training, 150, ModeOrthogonality))
-	}
-	if *all || *parallel {
-		results = append(results, neuralNetwork(training, 150, ModeParallel))
-	}
-	if *all || *mixed {
-		results = append(results, neuralNetwork(training, 150, ModeMixed))
-	}
-	if *all || *entropy {
-		results = append(results, neuralNetwork(training, 60, ModeEntropy))
-	}
-	if *all || *varianceMode {
-		results = append(results, neuralNetwork(training, 150, ModeVariance))
-	}
-
-	out, err := os.Create("README.md")
+	reduction := embeddings.VarianceReduction(2, 0, 0)
+	out, err := os.Create(fmt.Sprintf("results/result_%s.md", ModeRaw.String()))
 	if err != nil {
 		panic(err)
 	}
 	defer out.Close()
+	reduction.PrintTable(out, ModeRaw, 0)
+	result := Result{
+		Mode:        ModeRaw,
+		Reduction:   reduction,
+		Mislabeled:  reduction.GetMislabeled(0),
+		Consistency: reduction.GetConsistency(),
+	}
+	results = append(results, result)
+	add := func(batchSize int, mode Mode) {
+		out, err := os.Create(fmt.Sprintf("results/result_%s.md", mode.String()))
+		if err != nil {
+			panic(err)
+		}
+		defer out.Close()
+
+		result := neuralNetwork(training, batchSize, mode)
+
+		cutoff := 0.0
+		switch mode {
+		case ModeNone:
+			cutoff = 0.0006
+		case ModeOrthogonality:
+			cutoff = 0.01
+		case ModeParallel:
+			cutoff = 0.0004
+		case ModeMixed:
+			cutoff = 0.01
+		case ModeEntropy:
+			cutoff = 0.0
+		case ModeVariance:
+			cutoff = 0.0
+		}
+		result.Reduction.PrintTable(out, mode, cutoff)
+		result.Mislabeled = result.Reduction.GetMislabeled(cutoff)
+		result.Consistency = result.Reduction.GetConsistency()
+
+		results = append(results, result)
+	}
+	add(10, ModeNone)
+	if *all || *orthogonality {
+		add(150, ModeOrthogonality)
+	}
+	if *all || *parallel {
+		add(150, ModeParallel)
+	}
+	if *all || *mixed {
+		add(150, ModeMixed)
+	}
+	if *all || *entropy {
+		add(60, ModeEntropy)
+	}
+	if *all || *varianceMode {
+		add(150, ModeVariance)
+	}
+
+	readme, err := os.Create("README.md")
+	if err != nil {
+		panic(err)
+	}
+	defer readme.Close()
 
 	headers, rows := make([]string, 0, Width2+2), make([][]string, 0, len(results))
 	headers = append(headers, "mode", "consistency", "mislabeled")
@@ -457,5 +473,5 @@ func main() {
 		row := []string{result.Mode.String(), fmt.Sprintf("%d", result.Consistency), fmt.Sprintf("%d", result.Mislabeled)}
 		rows = append(rows, row)
 	}
-	printTable(out, headers, rows)
+	printTable(readme, headers, rows)
 }

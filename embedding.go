@@ -12,12 +12,14 @@ import (
 // Embeddings is a set of embeddings
 type Embeddings struct {
 	Columns    int
+	Network    *Network
 	Embeddings []Embedding
 }
 
 // Embedding is an embedding with a label and features
 type Embedding struct {
-	Label    string
+	iris.Iris
+	Source   int
 	Features []float64
 }
 
@@ -83,13 +85,20 @@ func (e *Embeddings) PivotVariance(column int, pivot float64) (left, right float
 }
 
 // VarianceReduction implements variance reduction algorithm
-func (e *Embeddings) VarianceReduction(depth int) *Reduction {
+func (e *Embeddings) VarianceReduction(depth int, label, count uint) *Reduction {
 	length := len(e.Embeddings)
 	if length == 0 {
 		return nil
 	}
 
-	reduction := Reduction{}
+	reduction := Reduction{
+		Embeddings: e,
+		Label:      label,
+	}
+	if depth <= 0 {
+		return &reduction
+	}
+
 	for k := 0; k < e.Columns; k++ {
 		total := e.Variance(k)
 		for _, row := range e.Embeddings {
@@ -101,17 +110,14 @@ func (e *Embeddings) VarianceReduction(depth int) *Reduction {
 		}
 	}
 
-	depth--
-	if depth <= 0 {
-		return &reduction
-	}
-
 	left := Embeddings{
 		Columns:    e.Columns,
+		Network:    e.Network,
 		Embeddings: make([]Embedding, 0, length),
 	}
 	right := Embeddings{
 		Columns:    e.Columns,
+		Network:    e.Network,
 		Embeddings: make([]Embedding, 0, length),
 	}
 	for _, row := range e.Embeddings {
@@ -121,63 +127,90 @@ func (e *Embeddings) VarianceReduction(depth int) *Reduction {
 			left.Embeddings = append(left.Embeddings, row)
 		}
 	}
-	reduction.Left, reduction.Right = left.VarianceReduction(depth), right.VarianceReduction(depth)
+	reduction.Left, reduction.Right =
+		left.VarianceReduction(depth-1, label, count+1),
+		right.VarianceReduction(depth-1, label|(1<<count), count+1)
 	return &reduction
 }
 
 // PrintTable prints a table of embeddings
-func (e *Embeddings) PrintTable(mode Mode, cutoff float64, reduction *Reduction) {
-	out, err := os.Create(fmt.Sprintf("results/result_%s.md", mode.String()))
-	if err != nil {
-		panic(err)
+func (r *Reduction) PrintTable(out *os.File, mode Mode, cutoff float64) {
+	if out == nil {
+		return
 	}
-	defer out.Close()
 
 	fmt.Fprintf(out, "# Training cost vs epochs\n")
 	fmt.Fprintf(out, "![epochs of %s](epochs_%s.png?raw=true)]\n\n", mode.String(), mode.String())
 
 	fmt.Fprintf(out, "# Decision tree\n")
 	fmt.Fprintf(out, "```go\n")
-	fmt.Fprintf(out, "%s\n", reduction.String())
+	fmt.Fprintf(out, "%s\n", r.String())
 	fmt.Fprintf(out, "```\n\n")
 
-	headers, rows := make([]string, 0, Width2+2), make([][]string, 0, len(e.Embeddings))
+	headers, rows := make([]string, 0, Width2+2), make([][]string, 0, 256)
 	headers = append(headers, "label", "cluster")
-	for i := 0; i < e.Columns; i++ {
+	for i := 0; i < r.Embeddings.Columns; i++ {
 		headers = append(headers, fmt.Sprintf("%d", i))
 	}
 
-	for _, item := range e.Embeddings {
-		row := make([]string, 0, e.Columns+2)
-		label, predicted := item.Label, reduction.Label(0, 0, cutoff, item.Features)
-		row = append(row, label, fmt.Sprintf("%d", predicted))
-		for _, value := range item.Features {
-			row = append(row, fmt.Sprintf("%f", value))
+	var load func(r *Reduction)
+	load = func(r *Reduction) {
+		if r == nil {
+			return
 		}
-		rows = append(rows, row)
+		if (r.Left == nil && r.Right == nil) || r.Max < cutoff {
+			for _, item := range r.Embeddings.Embeddings {
+				row := make([]string, 0, r.Embeddings.Columns+2)
+				label, predicted := item.Label, r.Label
+				row = append(row, label, fmt.Sprintf("%d", predicted))
+				for _, value := range item.Features {
+					row = append(row, fmt.Sprintf("%f", value))
+				}
+				rows = append(rows, row)
+			}
+			return
+		}
+		load(r.Left)
+		load(r.Right)
 	}
+	load(r.Left)
+	load(r.Right)
 
 	fmt.Fprintf(out, "# Output of neural network middle layer\n")
 	printTable(out, headers, rows)
 	fmt.Fprintf(out, "\n")
 
-	plotData(e, fmt.Sprintf("results/embedding_%s.png", mode.String()))
+	plotData(r.Embeddings, fmt.Sprintf("results/embedding_%s.png", mode.String()))
 	fmt.Fprintf(out, "# PCA of network middle layer\n")
 	fmt.Fprintf(out, "![embedding of %s](embedding_%s.png?raw=true)]\n", mode.String(), mode.String())
 }
 
 // GetMislabeled computes how many embeddings are mislabeled
-func (e *Embeddings) GetMislabeled(cutoff float64, reduction *Reduction) (mislabeled uint) {
+func (r *Reduction) GetMislabeled(cutoff float64) (mislabeled uint) {
 	counts := make(map[string]map[uint]uint)
-	for _, item := range e.Embeddings {
-		label, predicted := item.Label, reduction.Label(0, 0, cutoff, item.Features)
-		count, ok := counts[label]
-		if !ok {
-			count = make(map[uint]uint)
-			counts[label] = count
+	var count func(r *Reduction)
+	count = func(r *Reduction) {
+		if r == nil {
+			return
 		}
-		count[predicted]++
+		if (r.Left == nil && r.Right == nil) || r.Max < cutoff {
+			for _, item := range r.Embeddings.Embeddings {
+				label, predicted := item.Label, r.Label
+				count, ok := counts[label]
+				if !ok {
+					count = make(map[uint]uint)
+					counts[label] = count
+				}
+				count[predicted]++
+			}
+			return
+		}
+		count(r.Left)
+		count(r.Right)
 	}
+	count(r.Left)
+	count(r.Right)
+
 	type Triple struct {
 		Label     string
 		Predicted uint
@@ -204,20 +237,36 @@ func (e *Embeddings) GetMislabeled(cutoff float64, reduction *Reduction) (mislab
 			}
 		}
 	}
-	for _, item := range e.Embeddings {
-		label, predicted := item.Label, reduction.Label(0, 0, cutoff, item.Features)
-		if l, ok := labels[label]; !ok || l != predicted {
-			mislabeled++
+
+	var miss func(r *Reduction)
+	miss = func(r *Reduction) {
+		if r == nil {
+			return
 		}
+		if (r.Left == nil && r.Right == nil) || r.Max < cutoff {
+			for _, item := range r.Embeddings.Embeddings {
+				label, predicted := item.Label, r.Label
+				if l, ok := labels[label]; !ok || l != predicted {
+					mislabeled++
+				}
+			}
+			return
+		}
+		miss(r.Left)
+		miss(r.Right)
 	}
+	miss(r.Left)
+	miss(r.Right)
+
 	return mislabeled
 }
 
 // GetConsistency returns zero if the data is self consistent
-func (e *Embeddings) GetConsistency() (consistency uint) {
-	for i, x := range e.Embeddings {
+func (r *Reduction) GetConsistency() (consistency uint) {
+	embeddings := r.Embeddings
+	for i, x := range embeddings.Embeddings {
 		max, match := -1.0, 0
-		for j, y := range e.Embeddings {
+		for j, y := range embeddings.Embeddings {
 			if j == i {
 				continue
 			}
@@ -233,8 +282,8 @@ func (e *Embeddings) GetConsistency() (consistency uint) {
 				max, match = similarity, j
 			}
 		}
-		should := iris.Labels[e.Embeddings[i].Label]
-		found := iris.Labels[e.Embeddings[match].Label]
+		should := iris.Labels[embeddings.Embeddings[i].Label]
+		found := iris.Labels[embeddings.Embeddings[match].Label]
 		if should != found {
 			consistency++
 		}
@@ -244,6 +293,8 @@ func (e *Embeddings) GetConsistency() (consistency uint) {
 
 // Reduction is the result of variance reduction
 type Reduction struct {
+	Embeddings  *Embeddings
+	Label       uint
 	Column      int
 	Pivot       float64
 	Max         float64
@@ -259,10 +310,10 @@ func (r *Reduction) String() string {
 			spaces += " "
 		}
 		left, right := "", ""
-		if r.Left != nil {
+		if r.Left != nil && (r.Left.Left != nil || r.Left.Right != nil) {
 			left = serialize(r.Left, label, depth+1)
 		}
-		if r.Right != nil {
+		if r.Right != nil && (r.Right.Left != nil || r.Right.Right != nil) {
 			right = serialize(r.Right, label|(1<<depth), depth+1)
 		}
 		layer := fmt.Sprintf("%s// variance reduction: %f\n", spaces, r.Max)
@@ -282,16 +333,4 @@ func (r *Reduction) String() string {
 		return layer
 	}
 	return serialize(r, 0, 0)
-}
-
-// Label creates a label for some data based on the reduction
-func (r *Reduction) Label(label, depth uint, cutoff float64, data []float64) uint {
-	if r == nil {
-		return label
-	} else if r.Max < cutoff {
-		return label
-	} else if data[r.Column] > r.Pivot {
-		return r.Right.Label(label|(1<<depth), depth+1, cutoff, data)
-	}
-	return r.Left.Label(label, depth+1, cutoff, data)
 }
