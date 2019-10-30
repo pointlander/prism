@@ -6,3 +6,8 @@ https://project.inria.fr/paiss/files/2018/07/zisserman-self-supervised.pdf
 
 # Go implementation of BLAS (Basic Linear Algebra Subprograms)
 https://github.com/ziutek/blas  
+
+# databases
+http://www.face-rec.org/databases/  
+http://vision.ucsd.edu/content/yale-face-database  
+
