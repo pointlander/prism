@@ -94,6 +94,7 @@ func (e *Embeddings) VarianceReduction(depth int, label, count uint) *Reduction 
 	reduction := Reduction{
 		Embeddings: e,
 		Label:      label,
+		Depth:      count,
 	}
 	if depth <= 0 {
 		return &reduction
@@ -295,6 +296,7 @@ func (r *Reduction) GetConsistency() (consistency uint) {
 type Reduction struct {
 	Embeddings  *Embeddings
 	Label       uint
+	Depth       uint
 	Column      int
 	Pivot       float64
 	Max         float64
@@ -303,34 +305,41 @@ type Reduction struct {
 
 // String converts the reduction to a string representation
 func (r *Reduction) String() string {
-	var serialize func(r *Reduction, label, depth uint) string
-	serialize = func(r *Reduction, label, depth uint) string {
+	var serialize func(r *Reduction, depth uint) string
+	serialize = func(r *Reduction, depth uint) string {
 		spaces := ""
 		for i := uint(0); i < depth; i++ {
 			spaces += " "
 		}
 		left, right := "", ""
-		if r.Left != nil && (r.Left.Left != nil || r.Left.Right != nil) {
-			left = serialize(r.Left, label, depth+1)
+		var labelLeft, labelRight uint
+		if r.Left != nil {
+			labelLeft = r.Left.Label
+			if r.Left.Left != nil || r.Left.Right != nil {
+				left = serialize(r.Left, depth+1)
+			}
 		}
-		if r.Right != nil && (r.Right.Left != nil || r.Right.Right != nil) {
-			right = serialize(r.Right, label|(1<<depth), depth+1)
+		if r.Right != nil {
+			labelRight = r.Right.Label
+			if r.Right.Left != nil || r.Right.Right != nil {
+				right = serialize(r.Right, depth+1)
+			}
 		}
 		layer := fmt.Sprintf("%s// variance reduction: %f\n", spaces, r.Max)
 		layer += fmt.Sprintf("%sif output[%d] > %f {\n", spaces, r.Column, r.Pivot)
 		if right == "" {
-			layer += fmt.Sprintf("%s label := %d\n", spaces, label|(1<<depth))
+			layer += fmt.Sprintf("%s label := %d\n", spaces, labelRight)
 		} else {
 			layer += fmt.Sprintf("%s\n", right)
 		}
 		layer += fmt.Sprintf("%s} else {\n", spaces)
 		if left == "" {
-			layer += fmt.Sprintf("%s label := %d\n", spaces, label)
+			layer += fmt.Sprintf("%s label := %d\n", spaces, labelLeft)
 		} else {
 			layer += fmt.Sprintf("%s\n", left)
 		}
 		layer += fmt.Sprintf("%s}", spaces)
 		return layer
 	}
-	return serialize(r, 0, 0)
+	return serialize(r, 0)
 }

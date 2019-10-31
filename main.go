@@ -220,13 +220,24 @@ type Result struct {
 	Mislabeled  uint
 }
 
-func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Result) {
+type Context struct {
+	Count int
+}
+
+func (c *Context) neuralNetwork(d int, label, count uint, embeddings *Embeddings, batchSize int, mode Mode) (result Result) {
 	result.Mode = mode
-	fmt.Println(mode.String())
+	if d <= 0 {
+		return
+	}
+	fmt.Printf("%s %d\n", mode.String(), count)
 
 	network := NewNetwork(batchSize)
 
-	length := len(training)
+	length := len(embeddings.Embeddings)
+	training := make([]iris.Iris, 0, length)
+	for _, embedding := range embeddings.Embeddings {
+		training = append(training, embedding.Iris)
+	}
 	learn := func(mode Mode, makePlot bool) {
 		iterations := 1000
 		switch mode {
@@ -241,6 +252,9 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 			iterations = 1000
 		case ModeVariance:
 			iterations = 10000
+		}
+		if count > 0 {
+			iterations *= 10
 		}
 		points := network.Train(training, iterations)
 
@@ -262,10 +276,11 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 		p.Add(scatter)
 
 		if makePlot {
-			err = p.Save(8*vg.Inch, 8*vg.Inch, fmt.Sprintf("results/epochs_%s.png", mode.String()))
+			err = p.Save(8*vg.Inch, 8*vg.Inch, fmt.Sprintf("results/epochs_%s_%d.png", mode.String(), c.Count))
 			if err != nil {
 				panic(err)
 			}
+			c.Count++
 		}
 	}
 
@@ -341,24 +356,36 @@ func neuralNetwork(training []iris.Iris, batchSize int, mode Mode) (result Resul
 		learn(mode, true)
 	}
 
-	embeddings := network.Embeddings(training)
+	embeddins := network.Embeddings(training)
 
-	depth := 2
+	depth := 1
 	switch mode {
 	case ModeNone:
-		depth = 2
+		depth = 1
 	case ModeOrthogonality:
-		depth = 2
+		depth = 1
 	case ModeParallel:
-		depth = 2
+		depth = 1
 	case ModeMixed:
-		depth = 2
+		depth = 1
 	case ModeEntropy:
-		depth = 2
+		depth = 1
 	case ModeVariance:
-		depth = 2
+		depth = 1
 	}
-	result.Reduction = embeddings.VarianceReduction(depth, 0, 0)
+	result.Reduction = embeddins.VarianceReduction(depth, label, count)
+
+	left := result.Reduction.Left
+	resultA := c.neuralNetwork(d-1, left.Label, left.Depth, left.Embeddings, len(left.Embeddings.Embeddings), mode)
+	if resultA.Reduction != nil {
+		result.Reduction.Left = resultA.Reduction
+	}
+
+	right := result.Reduction.Right
+	resultB := c.neuralNetwork(d-1, right.Label, right.Depth, right.Embeddings, len(right.Embeddings.Embeddings), mode)
+	if resultB.Reduction != nil {
+		result.Reduction.Right = resultB.Reduction
+	}
 
 	return result
 }
@@ -421,7 +448,15 @@ func main() {
 		}
 		defer out.Close()
 
-		result := neuralNetwork(training, batchSize, mode)
+		embeddings, context := Embeddings{}, Context{}
+		for _, item := range training {
+			embedding := Embedding{
+				Iris: item,
+			}
+			embeddings.Embeddings = append(embeddings.Embeddings, embedding)
+		}
+
+		result := context.neuralNetwork(2, 0, 0, &embeddings, batchSize, mode)
 
 		cutoff := 0.0
 		switch mode {
