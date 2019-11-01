@@ -210,29 +210,22 @@ func (r *Reduction) GetEntropy(cutoff float64) (entropy float64) {
 	count(r.Left)
 	count(r.Right)
 
-	t := uint(0)
+	total := uint(0)
 	for _, histogram := range histograms {
-		for _, counts := range histogram {
-			t += counts
-		}
-	}
-	total := float64(t)
-	for _, histogram := range histograms {
-		s := uint(0)
-		for _, counts := range histogram {
-			s += counts
-		}
-		e, sum := 0.0, float64(s)
+		e, s := 0.0, uint(0)
 		for _, c := range histogram {
 			if c == 0 {
 				continue
 			}
+			s += c
 			counts := float64(c)
-			e += counts * math.Log2(counts) / sum
+			e += counts * math.Log2(counts)
 		}
-		entropy += sum * (math.Log2(sum) - e) / total
+		total += s
+		sum := float64(s)
+		entropy += (sum*math.Log2(sum) - e)
 	}
-	return entropy / MaxEntropy
+	return entropy / (float64(total) * MaxEntropy)
 }
 
 // GetConsistency returns zero if the data is self consistent
