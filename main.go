@@ -217,7 +217,7 @@ type Result struct {
 	Mode        Mode
 	Reduction   *Reduction
 	Consistency uint
-	Mislabeled  uint
+	Entropy     float64
 }
 
 type Context struct {
@@ -437,7 +437,7 @@ func main() {
 	result := Result{
 		Mode:        ModeRaw,
 		Reduction:   reduction,
-		Mislabeled:  reduction.GetMislabeled(0),
+		Entropy:     reduction.GetEntropy(0),
 		Consistency: reduction.GetConsistency(),
 	}
 	results = append(results, result)
@@ -461,20 +461,20 @@ func main() {
 		cutoff := 0.0
 		switch mode {
 		case ModeNone:
-			cutoff = 0.0006
+			cutoff = 0.0
 		case ModeOrthogonality:
-			cutoff = 0.01
+			cutoff = 0.0
 		case ModeParallel:
-			cutoff = 0.0004
+			cutoff = 0.0
 		case ModeMixed:
-			cutoff = 0.01
+			cutoff = 0.0
 		case ModeEntropy:
 			cutoff = 0.0
 		case ModeVariance:
 			cutoff = 0.0
 		}
 		result.Reduction.PrintTable(out, mode, cutoff)
-		result.Mislabeled = result.Reduction.GetMislabeled(cutoff)
+		result.Entropy = result.Reduction.GetEntropy(cutoff)
 		result.Consistency = result.Reduction.GetConsistency()
 
 		results = append(results, result)
@@ -503,9 +503,9 @@ func main() {
 	defer readme.Close()
 
 	headers, rows := make([]string, 0, Width2+2), make([][]string, 0, len(results))
-	headers = append(headers, "mode", "consistency", "mislabeled")
+	headers = append(headers, "mode", "consistency", "entropy")
 	for _, result := range results {
-		row := []string{result.Mode.String(), fmt.Sprintf("%d", result.Consistency), fmt.Sprintf("%d", result.Mislabeled)}
+		row := []string{result.Mode.String(), fmt.Sprintf("%d", result.Consistency), fmt.Sprintf("%f", result.Entropy)}
 		rows = append(rows, row)
 	}
 	printTable(readme, headers, rows)

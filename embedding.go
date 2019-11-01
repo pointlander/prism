@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"sort"
 
 	"github.com/pointlander/datum/iris"
 )
@@ -186,23 +185,20 @@ func (r *Reduction) PrintTable(out *os.File, mode Mode, cutoff float64) {
 	fmt.Fprintf(out, "![embedding of %s](embedding_%s.png?raw=true)]\n", mode.String(), mode.String())
 }
 
-// GetMislabeled computes how many embeddings are mislabeled
-func (r *Reduction) GetMislabeled(cutoff float64) (mislabeled uint) {
-	counts := make(map[string]map[uint]uint)
+// GetEntropy gets the entropy
+func (r *Reduction) GetEntropy(cutoff float64) (entropy float64) {
+	histograms := make(map[uint][3]uint)
 	var count func(r *Reduction)
 	count = func(r *Reduction) {
 		if r == nil {
 			return
 		}
 		if (r.Left == nil && r.Right == nil) || r.Max < cutoff {
+			predicted := r.Label
 			for _, item := range r.Embeddings.Embeddings {
-				label, predicted := item.Label, r.Label
-				count, ok := counts[label]
-				if !ok {
-					count = make(map[uint]uint)
-					counts[label] = count
-				}
-				count[predicted]++
+				histogram := histograms[predicted]
+				histogram[iris.Labels[item.Label]]++
+				histograms[predicted] = histogram
 			}
 			return
 		}
@@ -212,54 +208,28 @@ func (r *Reduction) GetMislabeled(cutoff float64) (mislabeled uint) {
 	count(r.Left)
 	count(r.Right)
 
-	type Triple struct {
-		Label     string
-		Predicted uint
-		Count     uint
-	}
-	triples := make([]Triple, 0, 8)
-	for label, count := range counts {
-		for predicted, c := range count {
-			triples = append(triples, Triple{
-				Label:     label,
-				Predicted: predicted,
-				Count:     c,
-			})
+	total := uint(0)
+	for _, histogram := range histograms {
+		for _, counts := range histogram {
+			total += counts
 		}
 	}
-	sort.Slice(triples, func(i, j int) bool {
-		return triples[i].Count > triples[j].Count
-	})
-	labels, used := make(map[string]uint), make(map[uint]bool)
-	for _, triple := range triples {
-		if _, ok := labels[triple.Label]; !ok {
-			if !used[triple.Predicted] {
-				labels[triple.Label], used[triple.Predicted] = triple.Predicted, true
+	for _, histogram := range histograms {
+		sum := uint(0)
+		for _, counts := range histogram {
+			sum += counts
+		}
+		e := 0.0
+		for _, counts := range histogram {
+			if counts == 0 {
+				continue
 			}
+			p := float64(counts) / float64(sum)
+			e += p * math.Log2(p)
 		}
+		entropy += e * float64(sum) / float64(total)
 	}
-
-	var miss func(r *Reduction)
-	miss = func(r *Reduction) {
-		if r == nil {
-			return
-		}
-		if (r.Left == nil && r.Right == nil) || r.Max < cutoff {
-			for _, item := range r.Embeddings.Embeddings {
-				label, predicted := item.Label, r.Label
-				if l, ok := labels[label]; !ok || l != predicted {
-					mislabeled++
-				}
-			}
-			return
-		}
-		miss(r.Left)
-		miss(r.Right)
-	}
-	miss(r.Left)
-	miss(r.Right)
-
-	return mislabeled
+	return -entropy
 }
 
 // GetConsistency returns zero if the data is self consistent
