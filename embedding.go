@@ -8,6 +8,8 @@ import (
 	"github.com/pointlander/datum/iris"
 )
 
+var MaxEntropy = math.Log2(3)
+
 // Embeddings is a set of embeddings
 type Embeddings struct {
 	Columns    int
@@ -208,28 +210,29 @@ func (r *Reduction) GetEntropy(cutoff float64) (entropy float64) {
 	count(r.Left)
 	count(r.Right)
 
-	total := uint(0)
+	t := uint(0)
 	for _, histogram := range histograms {
 		for _, counts := range histogram {
-			total += counts
+			t += counts
 		}
 	}
+	total := float64(t)
 	for _, histogram := range histograms {
-		sum := uint(0)
+		s := uint(0)
 		for _, counts := range histogram {
-			sum += counts
+			s += counts
 		}
-		e := 0.0
-		for _, counts := range histogram {
-			if counts == 0 {
+		e, sum := 0.0, float64(s)
+		for _, c := range histogram {
+			if c == 0 {
 				continue
 			}
-			p := float64(counts) / float64(sum)
-			e += p * math.Log2(p)
+			counts := float64(c)
+			e += counts * math.Log2(counts) / sum
 		}
-		entropy += e * float64(sum) / float64(total)
+		entropy += sum * (math.Log2(sum) - e) / total
 	}
-	return -entropy
+	return entropy / MaxEntropy
 }
 
 // GetConsistency returns zero if the data is self consistent
