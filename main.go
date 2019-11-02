@@ -30,6 +30,7 @@ const (
 	ModeMixed
 	ModeEntropy
 	ModeVariance
+	NumberOfModes
 )
 
 func (m Mode) String() string {
@@ -215,6 +216,7 @@ func printTable(out io.Writer, headers []string, rows [][]string) {
 
 type Result struct {
 	Mode        Mode
+	Seed        int64
 	Reduction   *Reduction
 	Consistency uint
 	Entropy     float64
@@ -222,16 +224,20 @@ type Result struct {
 
 type Context struct {
 	Count int
+	Seed  int64
 }
 
 func (c *Context) neuralNetwork(d int, label, count uint, embeddings *Embeddings, batchSize int, mode Mode) (result Result) {
-	result.Mode = mode
+	result = Result{
+		Mode: mode,
+		Seed: c.Seed,
+	}
 	if d <= 0 {
 		return
 	}
-	fmt.Printf("%s %d\n", mode.String(), count)
+	fmt.Printf("%d %s %d\n", c.Seed, mode.String(), count)
 
-	network := NewNetwork(batchSize)
+	network := NewNetwork(c.Seed, batchSize)
 
 	length := len(embeddings.Embeddings)
 	training := make([]iris.Iris, 0, length)
@@ -258,24 +264,24 @@ func (c *Context) neuralNetwork(d int, label, count uint, embeddings *Embeddings
 		}
 		points := network.Train(training, iterations)
 
-		p, err := plot.New()
-		if err != nil {
-			panic(err)
-		}
+		if makePlot && c.Seed == 1 {
+			p, err := plot.New()
+			if err != nil {
+				panic(err)
+			}
 
-		p.Title.Text = mode.String()
-		p.X.Label.Text = "epochs"
-		p.Y.Label.Text = "cost"
+			p.Title.Text = mode.String()
+			p.X.Label.Text = "epochs"
+			p.Y.Label.Text = "cost"
 
-		scatter, err := plotter.NewScatter(points)
-		if err != nil {
-			panic(err)
-		}
-		scatter.GlyphStyle.Radius = vg.Length(1)
-		scatter.GlyphStyle.Shape = draw.CircleGlyph{}
-		p.Add(scatter)
+			scatter, err := plotter.NewScatter(points)
+			if err != nil {
+				panic(err)
+			}
+			scatter.GlyphStyle.Radius = vg.Length(1)
+			scatter.GlyphStyle.Shape = draw.CircleGlyph{}
+			p.Add(scatter)
 
-		if makePlot {
 			err = p.Save(8*vg.Inch, 8*vg.Inch, fmt.Sprintf("results/epochs_%s_%d.png", mode.String(), c.Count))
 			if err != nil {
 				panic(err)
@@ -391,16 +397,35 @@ func (c *Context) neuralNetwork(d int, label, count uint, embeddings *Embeddings
 }
 
 var (
-	all           = flag.Bool("all", false, "all of the modes")
-	orthogonality = flag.Bool("orthogonality", false, "orthogonality mode")
-	parallel      = flag.Bool("parallel", false, "parallel mode")
-	mixed         = flag.Bool("mixed", false, "mixed mode")
-	entropy       = flag.Bool("entropy", false, "entropy mode")
-	varianceMode  = flag.Bool("variance", false, "variance mode")
+	options = struct {
+		all           *bool
+		orthogonality *bool
+		parallel      *bool
+		mixed         *bool
+		entropy       *bool
+		variance      *bool
+		experiments   *int64
+	}{
+		all:           flag.Bool("all", false, "all of the modes"),
+		orthogonality: flag.Bool("orthogonality", false, "orthogonality mode"),
+		parallel:      flag.Bool("parallel", false, "parallel mode"),
+		mixed:         flag.Bool("mixed", false, "mixed mode"),
+		entropy:       flag.Bool("entropy", false, "entropy mode"),
+		variance:      flag.Bool("variance", false, "variance mode"),
+		experiments:   flag.Int64("experiments", 1, "number of experiments"),
+	}
 )
 
 func main() {
 	flag.Parse()
+
+	if *options.all {
+		*options.orthogonality = true
+		*options.parallel = true
+		*options.mixed = true
+		*options.entropy = true
+		*options.variance = true
+	}
 
 	err := os.MkdirAll("results", 0700)
 	if err != nil {
@@ -410,7 +435,6 @@ func main() {
 	once.Do(load)
 	training := datum.Fisher
 
-	results := make([]Result, 0)
 	fmt.Println(ModeRaw.String())
 	length := len(training)
 	embeddings := Embeddings{
@@ -436,19 +460,14 @@ func main() {
 	reduction.PrintTable(out, ModeRaw, 0)
 	result := Result{
 		Mode:        ModeRaw,
+		Seed:        1,
 		Reduction:   reduction,
 		Entropy:     reduction.GetEntropy(0),
 		Consistency: reduction.GetConsistency(),
 	}
-	results = append(results, result)
-	add := func(batchSize int, mode Mode) {
-		out, err := os.Create(fmt.Sprintf("results/result_%s.md", mode.String()))
-		if err != nil {
-			panic(err)
-		}
-		defer out.Close()
 
-		embeddings, context := Embeddings{}, Context{}
+	add := func(seed int64, batchSize int, mode Mode) Result {
+		embeddings, context := Embeddings{}, Context{Seed: seed}
 		for _, item := range training {
 			embedding := Embedding{
 				Iris: item,
@@ -473,27 +492,48 @@ func main() {
 		case ModeVariance:
 			cutoff = 0.0
 		}
-		result.Reduction.PrintTable(out, mode, cutoff)
+		if seed == 1 {
+			out, err := os.Create(fmt.Sprintf("results/result_%s.md", mode.String()))
+			if err != nil {
+				panic(err)
+			}
+			defer out.Close()
+			result.Reduction.PrintTable(out, mode, cutoff)
+		}
 		result.Entropy = result.Reduction.GetEntropy(cutoff)
 		result.Consistency = result.Reduction.GetConsistency()
 
-		results = append(results, result)
+		return result
 	}
-	add(10, ModeNone)
-	if *all || *orthogonality {
-		add(150, ModeOrthogonality)
+
+	fini := make(chan []Result, 8)
+	experiment := func(seed int64) {
+		results := make([]Result, 0, 8)
+		results = append(results, result, add(seed, 10, ModeNone))
+		if *options.orthogonality {
+			results = append(results, add(seed, 150, ModeOrthogonality))
+		}
+		if *options.parallel {
+			results = append(results, add(seed, 150, ModeParallel))
+		}
+		if *options.mixed {
+			results = append(results, add(seed, 150, ModeMixed))
+		}
+		if *options.entropy {
+			results = append(results, add(seed, 60, ModeEntropy))
+		}
+		if *options.variance {
+			results = append(results, add(seed, 150, ModeVariance))
+		}
+		fini <- results
 	}
-	if *all || *parallel {
-		add(150, ModeParallel)
+
+	for i := int64(0); i < *options.experiments; i++ {
+		go experiment(i + 1)
 	}
-	if *all || *mixed {
-		add(150, ModeMixed)
-	}
-	if *all || *entropy {
-		add(60, ModeEntropy)
-	}
-	if *all || *varianceMode {
-		add(150, ModeVariance)
+	experiments := make([][]Result, 0, *options.experiments)
+	for i := int64(0); i < *options.experiments; i++ {
+		experiments = append(experiments, <-fini)
 	}
 
 	readme, err := os.Create("README.md")
@@ -502,11 +542,29 @@ func main() {
 	}
 	defer readme.Close()
 
-	headers, rows := make([]string, 0, Width2+2), make([][]string, 0, len(results))
-	headers = append(headers, "mode", "consistency", "entropy")
-	for _, result := range results {
-		row := []string{result.Mode.String(), fmt.Sprintf("%d", result.Consistency), fmt.Sprintf("%f", result.Entropy)}
+	entropy := make([]float64, NumberOfModes)
+	for _, experiment := range experiments {
+		if experiment[1].Seed == 1 {
+			headers, rows := make([]string, 0, 3), make([][]string, 0, len(experiment))
+			headers = append(headers, "mode", "consistency", "entropy")
+			for _, result := range experiment {
+				row := []string{result.Mode.String(), fmt.Sprintf("%d", result.Consistency), fmt.Sprintf("%f", result.Entropy)}
+				rows = append(rows, row)
+			}
+			printTable(readme, headers, rows)
+		}
+		for _, result := range experiment {
+			entropy[result.Mode] += result.Entropy
+		}
+	}
+
+	n := float64(len(experiments))
+	headers, rows := make([]string, 0, 2), make([][]string, 0, len(entropy))
+	headers = append(headers, "mode", "entropy")
+	for mode, e := range entropy {
+		row := []string{Mode(mode).String(), fmt.Sprintf("%f", e/n)}
 		rows = append(rows, row)
 	}
+	fmt.Fprintf(readme, "\n")
 	printTable(readme, headers, rows)
 }
