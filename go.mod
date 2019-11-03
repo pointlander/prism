@@ -1,4 +1,4 @@
-module github.com/pointlander/square
+module github.com/pointlander/prism
 
 go 1.12
 
