@@ -91,17 +91,13 @@ func (e *Embeddings) PivotVariance(column int, pivot float64) (left, right float
 
 // VarianceReduction implements variance reduction algorithm
 func (e *Embeddings) VarianceReduction(depth int, label, count uint) *Reduction {
-	length := len(e.Embeddings)
-	if length == 0 {
-		return nil
-	}
-
 	reduction := Reduction{
 		Embeddings: e,
 		Label:      label,
 		Depth:      count,
 	}
-	if depth <= 0 {
+	length := len(e.Embeddings)
+	if depth <= 0 || length == 0 {
 		return &reduction
 	}
 

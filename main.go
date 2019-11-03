@@ -237,14 +237,13 @@ func (c *Context) neuralNetwork(d int, label, count uint, embeddings *Embeddings
 		Mode: mode,
 		Seed: c.Seed,
 	}
-	if d <= 0 {
+	length := len(embeddings.Embeddings)
+	if d <= 0 || length == 0 {
 		return
 	}
 	fmt.Printf("%d %s %d\n", c.Seed, mode.String(), count)
 
 	network := NewNetwork(c.Seed, batchSize)
-
-	length := len(embeddings.Embeddings)
 	training := make([]iris.Iris, 0, length)
 	for _, embedding := range embeddings.Embeddings {
 		training = append(training, embedding.Iris)
