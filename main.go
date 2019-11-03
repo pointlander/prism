@@ -55,9 +55,9 @@ func (m Mode) String() string {
 }
 
 const (
-	Width  = 16
-	Width2 = 16
-	Width3 = 16
+	Width  = 4
+	Width2 = 4
+	Width3 = 4
 	Eta    = .6
 )
 
@@ -249,6 +249,7 @@ func (c *Context) neuralNetwork(d int, label, count uint, embeddings *Embeddings
 		iterations := 1000
 		switch mode {
 		case ModeNone:
+			iterations = 1000
 		case ModeOrthogonality:
 			iterations = 1000
 		case ModeParallel:
@@ -295,13 +296,11 @@ func (c *Context) neuralNetwork(d int, label, count uint, embeddings *Embeddings
 	case ModeNone:
 		learn(ModeNone, true)
 	case ModeOrthogonality:
-		learn(ModeNone, false)
 		weight := tf32.NewV(1)
 		weight.X = append(weight.X, 1)
 		network.Cost = tf32.Add(network.Cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Abs(tf32.Orthogonality(network.L[1])))))
 		learn(mode, true)
 	case ModeParallel:
-		learn(ModeNone, false)
 		ones := tf32.NewV(((batchSize - 1) * batchSize) / 2)
 		for i := 0; i < cap(ones.X); i++ {
 			ones.X = append(ones.X, 1)
@@ -311,7 +310,6 @@ func (c *Context) neuralNetwork(d int, label, count uint, embeddings *Embeddings
 		network.Cost = tf32.Add(network.Cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Sub(ones.Meta(), tf32.Orthogonality(network.L[1])))))
 		learn(mode, true)
 	case ModeMixed:
-		learn(ModeNone, false)
 		pairs := make([]int, 0, length)
 		for i, a := range training {
 			max, match := -1.0, 0
@@ -348,13 +346,11 @@ func (c *Context) neuralNetwork(d int, label, count uint, embeddings *Embeddings
 		network.Cost = tf32.Add(network.Cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Abs(tf32.Sub(mask.Meta(), tf32.Orthogonality(network.L[1]))))))
 		learn(mode, true)
 	case ModeEntropy:
-		learn(ModeNone, false)
 		weight := tf32.NewV(1)
 		weight.X = append(weight.X, .5)
 		network.Cost = tf32.Add(network.Cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Entropy(tf32.Softmax(tf32.T(network.L[1]))))))
 		learn(mode, true)
 	case ModeVariance:
-		learn(ModeNone, false)
 		one := tf32.NewV(1)
 		one.X = append(one.X, 1)
 		weight := tf32.NewV(1)
