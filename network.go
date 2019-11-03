@@ -24,9 +24,9 @@ type Network struct {
 }
 
 // NewNetwork creates a new neural network
-func NewNetwork(batchSize int) *Network {
+func NewNetwork(seed int64, batchSize int) *Network {
 	n := Network{
-		Rand:       rand.New(rand.NewSource(1)),
+		Rand:       rand.New(rand.NewSource(seed)),
 		BatchSize:  batchSize,
 		Parameters: make([]*tf32.V, 0, 8),
 	}
@@ -136,10 +136,10 @@ func (n *Network) Embeddings(training []iris.Iris) Embeddings {
 	input := tf32.NewV(4)
 	l1 := tf32.Sigmoid(tf32.Add(tf32.Mul(n.W[0].Meta(), input.Meta()), n.B[0].Meta()))
 	l2 := tf32.Sigmoid(tf32.Add(tf32.Mul(n.W[1].Meta(), l1), n.B[1].Meta()))
-	tf32.Static.InferenceOnly = true
+	/*tf32.Static.InferenceOnly = true
 	defer func() {
 		tf32.Static.InferenceOnly = false
-	}()
+	}()*/
 	embeddings := Embeddings{
 		Columns:    Width2,
 		Network:    n,

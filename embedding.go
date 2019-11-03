@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"sort"
 
 	"github.com/pointlander/datum/iris"
 )
+
+var MaxEntropy = math.Log2(3)
 
 // Embeddings is a set of embeddings
 type Embeddings struct {
@@ -94,6 +95,7 @@ func (e *Embeddings) VarianceReduction(depth int, label, count uint) *Reduction 
 	reduction := Reduction{
 		Embeddings: e,
 		Label:      label,
+		Depth:      count,
 	}
 	if depth <= 0 {
 		return &reduction
@@ -185,23 +187,20 @@ func (r *Reduction) PrintTable(out *os.File, mode Mode, cutoff float64) {
 	fmt.Fprintf(out, "![embedding of %s](embedding_%s.png?raw=true)]\n", mode.String(), mode.String())
 }
 
-// GetMislabeled computes how many embeddings are mislabeled
-func (r *Reduction) GetMislabeled(cutoff float64) (mislabeled uint) {
-	counts := make(map[string]map[uint]uint)
+// GetEntropy gets the entropy
+func (r *Reduction) GetEntropy(cutoff float64) (entropy float64) {
+	histograms := make(map[uint][3]uint)
 	var count func(r *Reduction)
 	count = func(r *Reduction) {
 		if r == nil {
 			return
 		}
 		if (r.Left == nil && r.Right == nil) || r.Max < cutoff {
+			predicted := r.Label
 			for _, item := range r.Embeddings.Embeddings {
-				label, predicted := item.Label, r.Label
-				count, ok := counts[label]
-				if !ok {
-					count = make(map[uint]uint)
-					counts[label] = count
-				}
-				count[predicted]++
+				histogram := histograms[predicted]
+				histogram[iris.Labels[item.Label]]++
+				histograms[predicted] = histogram
 			}
 			return
 		}
@@ -211,54 +210,22 @@ func (r *Reduction) GetMislabeled(cutoff float64) (mislabeled uint) {
 	count(r.Left)
 	count(r.Right)
 
-	type Triple struct {
-		Label     string
-		Predicted uint
-		Count     uint
-	}
-	triples := make([]Triple, 0, 8)
-	for label, count := range counts {
-		for predicted, c := range count {
-			triples = append(triples, Triple{
-				Label:     label,
-				Predicted: predicted,
-				Count:     c,
-			})
-		}
-	}
-	sort.Slice(triples, func(i, j int) bool {
-		return triples[i].Count > triples[j].Count
-	})
-	labels, used := make(map[string]uint), make(map[uint]bool)
-	for _, triple := range triples {
-		if _, ok := labels[triple.Label]; !ok {
-			if !used[triple.Predicted] {
-				labels[triple.Label], used[triple.Predicted] = triple.Predicted, true
+	total := uint(0)
+	for _, histogram := range histograms {
+		e, s := 0.0, uint(0)
+		for _, c := range histogram {
+			if c == 0 {
+				continue
 			}
+			s += c
+			counts := float64(c)
+			e += counts * math.Log2(counts)
 		}
+		total += s
+		sum := float64(s)
+		entropy += (sum*math.Log2(sum) - e)
 	}
-
-	var miss func(r *Reduction)
-	miss = func(r *Reduction) {
-		if r == nil {
-			return
-		}
-		if (r.Left == nil && r.Right == nil) || r.Max < cutoff {
-			for _, item := range r.Embeddings.Embeddings {
-				label, predicted := item.Label, r.Label
-				if l, ok := labels[label]; !ok || l != predicted {
-					mislabeled++
-				}
-			}
-			return
-		}
-		miss(r.Left)
-		miss(r.Right)
-	}
-	miss(r.Left)
-	miss(r.Right)
-
-	return mislabeled
+	return entropy / (float64(total) * MaxEntropy)
 }
 
 // GetConsistency returns zero if the data is self consistent
@@ -295,6 +262,7 @@ func (r *Reduction) GetConsistency() (consistency uint) {
 type Reduction struct {
 	Embeddings  *Embeddings
 	Label       uint
+	Depth       uint
 	Column      int
 	Pivot       float64
 	Max         float64
@@ -303,34 +271,41 @@ type Reduction struct {
 
 // String converts the reduction to a string representation
 func (r *Reduction) String() string {
-	var serialize func(r *Reduction, label, depth uint) string
-	serialize = func(r *Reduction, label, depth uint) string {
+	var serialize func(r *Reduction, depth uint) string
+	serialize = func(r *Reduction, depth uint) string {
 		spaces := ""
 		for i := uint(0); i < depth; i++ {
 			spaces += " "
 		}
 		left, right := "", ""
-		if r.Left != nil && (r.Left.Left != nil || r.Left.Right != nil) {
-			left = serialize(r.Left, label, depth+1)
+		var labelLeft, labelRight uint
+		if r.Left != nil {
+			labelLeft = r.Left.Label
+			if r.Left.Left != nil || r.Left.Right != nil {
+				left = serialize(r.Left, depth+1)
+			}
 		}
-		if r.Right != nil && (r.Right.Left != nil || r.Right.Right != nil) {
-			right = serialize(r.Right, label|(1<<depth), depth+1)
+		if r.Right != nil {
+			labelRight = r.Right.Label
+			if r.Right.Left != nil || r.Right.Right != nil {
+				right = serialize(r.Right, depth+1)
+			}
 		}
 		layer := fmt.Sprintf("%s// variance reduction: %f\n", spaces, r.Max)
 		layer += fmt.Sprintf("%sif output[%d] > %f {\n", spaces, r.Column, r.Pivot)
 		if right == "" {
-			layer += fmt.Sprintf("%s label := %d\n", spaces, label|(1<<depth))
+			layer += fmt.Sprintf("%s label := %d\n", spaces, labelRight)
 		} else {
 			layer += fmt.Sprintf("%s\n", right)
 		}
 		layer += fmt.Sprintf("%s} else {\n", spaces)
 		if left == "" {
-			layer += fmt.Sprintf("%s label := %d\n", spaces, label)
+			layer += fmt.Sprintf("%s label := %d\n", spaces, labelLeft)
 		} else {
 			layer += fmt.Sprintf("%s\n", left)
 		}
 		layer += fmt.Sprintf("%s}", spaces)
 		return layer
 	}
-	return serialize(r, 0, 0)
+	return serialize(r, 0)
 }
