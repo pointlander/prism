@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"sort"
 	"sync"
 
 	"gonum.org/v1/gonum/mat"
@@ -542,9 +543,20 @@ func main() {
 	}
 	defer readme.Close()
 
-	entropy := make([]float64, NumberOfModes)
+	type Statistic struct {
+		Mode       Mode
+		Sum        float64
+		SumSquared float64
+	}
+	statistics := make([]Statistic, NumberOfModes)
+	for i := range statistics {
+		statistics[i].Mode = Mode(i)
+	}
 	for _, experiment := range experiments {
 		if experiment[1].Seed == 1 {
+			sort.Slice(experiment, func(i, j int) bool {
+				return experiment[i].Entropy < experiment[j].Entropy
+			})
 			headers, rows := make([]string, 0, 3), make([][]string, 0, len(experiment))
 			headers = append(headers, "mode", "consistency", "entropy")
 			for _, result := range experiment {
@@ -554,15 +566,21 @@ func main() {
 			printTable(readme, headers, rows)
 		}
 		for _, result := range experiment {
-			entropy[result.Mode] += result.Entropy
+			statistics[result.Mode].Sum += result.Entropy
+			statistics[result.Mode].SumSquared += result.Entropy * result.Entropy
 		}
 	}
 
+	sort.Slice(statistics, func(i, j int) bool {
+		return statistics[i].Sum < statistics[j].Sum
+	})
 	n := float64(len(experiments))
-	headers, rows := make([]string, 0, 2), make([][]string, 0, len(entropy))
-	headers = append(headers, "mode", "entropy")
-	for mode, e := range entropy {
-		row := []string{Mode(mode).String(), fmt.Sprintf("%f", e/n)}
+	headers, rows := make([]string, 0, 2), make([][]string, 0, len(statistics))
+	headers = append(headers, "mode", "entropy mean", "entropy variance")
+	for _, statistic := range statistics {
+		mean := statistic.Sum / n
+		variance := math.Abs(statistic.SumSquared/n - mean*mean)
+		row := []string{statistic.Mode.String(), fmt.Sprintf("%f", mean), fmt.Sprintf("%f", variance)}
 		rows = append(rows, row)
 	}
 	fmt.Fprintf(readme, "\n")
