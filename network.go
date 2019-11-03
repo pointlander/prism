@@ -140,10 +140,6 @@ func (n *Network) Embeddings(training []iris.Iris) Embeddings {
 	input := tf32.NewV(4)
 	l1 := tf32.Sigmoid(tf32.Add(tf32.Mul(n.W[0].Meta(), input.Meta()), n.B[0].Meta()))
 	l2 := tf32.Sigmoid(tf32.Add(tf32.Mul(n.W[1].Meta(), l1), n.B[1].Meta()))
-	/*tf32.Static.InferenceOnly = true
-	defer func() {
-		tf32.Static.InferenceOnly = false
-	}()*/
 	embeddings := Embeddings{
 		Columns:    Width2,
 		Network:    n,
@@ -160,10 +156,11 @@ func (n *Network) Embeddings(training []iris.Iris) Embeddings {
 			Source:   i,
 			Features: make([]float64, 0, Width2),
 		}
-		l2(func(a *tf32.V) {
+		l2(func(a *tf32.V) bool {
 			for _, value := range a.X {
 				embedding.Features = append(embedding.Features, float64(value))
 			}
+			return true
 		})
 		embeddings.Embeddings = append(embeddings.Embeddings, embedding)
 	}
