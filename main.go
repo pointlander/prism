@@ -300,18 +300,16 @@ func (c *Context) neuralNetwork(d int, label, count uint, embeddings *Embeddings
 	case ModeNone:
 		learn(ModeNone, true)
 	case ModeOrthogonality:
-		weight := tf32.NewV(1)
-		weight.X = append(weight.X, 1)
-		network.Cost = tf32.Add(network.Cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Abs(tf32.Orthogonality(network.L[1])))))
+		orthogonality := tf32.Avg(tf32.Abs(tf32.Orthogonality(network.L[1])))
+		network.Cost = tf32.Add(network.Cost, tf32.Hadamard(orthogonality, orthogonality))
 		learn(mode, true)
 	case ModeParallel:
 		ones := tf32.NewV(((batchSize - 1) * batchSize) / 2)
 		for i := 0; i < cap(ones.X); i++ {
 			ones.X = append(ones.X, 1)
 		}
-		weight := tf32.NewV(1)
-		weight.X = append(weight.X, 1)
-		network.Cost = tf32.Add(network.Cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Sub(ones.Meta(), tf32.Orthogonality(network.L[1])))))
+		parallel := tf32.Avg(tf32.Sub(ones.Meta(), tf32.Orthogonality(network.L[1])))
+		network.Cost = tf32.Add(network.Cost, tf32.Hadamard(parallel, parallel))
 		learn(mode, true)
 	case ModeMixed:
 		pairs := make([]int, 0, length)
@@ -345,21 +343,18 @@ func (c *Context) neuralNetwork(d int, label, count uint, embeddings *Embeddings
 				}
 			}
 		}
-		weight := tf32.NewV(1)
-		weight.X = append(weight.X, 1)
-		network.Cost = tf32.Add(network.Cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Abs(tf32.Sub(mask.Meta(), tf32.Orthogonality(network.L[1]))))))
+		mixed := tf32.Avg(tf32.Abs(tf32.Sub(mask.Meta(), tf32.Orthogonality(network.L[1]))))
+		network.Cost = tf32.Add(network.Cost, tf32.Hadamard(mixed, mixed))
 		learn(mode, true)
 	case ModeEntropy:
-		weight := tf32.NewV(1)
-		weight.X = append(weight.X, .5)
-		network.Cost = tf32.Add(network.Cost, tf32.Hadamard(weight.Meta(), tf32.Avg(tf32.Entropy(tf32.Softmax(tf32.T(network.L[1]))))))
+		entropy := tf32.Avg(tf32.Entropy(tf32.Softmax(tf32.T(network.L[1]))))
+		network.Cost = tf32.Add(network.Cost, tf32.Hadamard(entropy, entropy))
 		learn(mode, true)
 	case ModeVariance:
 		one := tf32.NewV(1)
 		one.X = append(one.X, 1)
-		weight := tf32.NewV(1)
-		weight.X = append(weight.X, 1)
-		network.Cost = tf32.Add(network.Cost, tf32.Hadamard(weight.Meta(), tf32.Sub(one.Meta(), tf32.Avg(tf32.Variance(tf32.T(network.L[1]))))))
+		variance := tf32.Sub(one.Meta(), tf32.Avg(tf32.Variance(tf32.T(network.L[1]))))
+		network.Cost = tf32.Add(network.Cost, tf32.Hadamard(variance, variance))
 		learn(mode, true)
 	}
 

@@ -58,7 +58,7 @@ func NewNetwork(seed int64, batchSize int) *Network {
 		last = n.L[i]
 	}
 	n.Cost = tf32.Avg(tf32.Sub(n.Ones.Meta(), tf32.Similarity(last, n.Output.Meta())))
-	//cost := tf32.Avg(tf32.Quadratic(last, output.Meta()))
+	//n.Cost = tf32.Avg(tf32.Quadratic(last, n.Output.Meta()))
 	return &n
 }
 
