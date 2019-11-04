@@ -21,6 +21,7 @@ import (
 	"gonum.org/v1/plot/vg"
 	"gonum.org/v1/plot/vg/draw"
 
+	"github.com/bugra/kmeans"
 	"github.com/pointlander/datum/iris"
 	"github.com/pointlander/gradient/tf32"
 )
@@ -181,6 +182,7 @@ func printTable(out io.Writer, headers []string, rows [][]string) {
 		}
 	}
 
+	last := len(headers) - 1
 	fmt.Fprintf(out, "| ")
 	for i, header := range headers {
 		fmt.Fprintf(out, "%s", header)
@@ -189,7 +191,10 @@ func printTable(out io.Writer, headers []string, rows [][]string) {
 			fmt.Fprintf(out, " ")
 			spaces--
 		}
-		fmt.Fprintf(out, " | ")
+		fmt.Fprintf(out, " |")
+		if i < last {
+			fmt.Fprintf(out, " ")
+		}
 	}
 	fmt.Fprintf(out, "\n| ")
 	for i, header := range headers {
@@ -201,11 +206,15 @@ func printTable(out io.Writer, headers []string, rows [][]string) {
 			fmt.Fprintf(out, "-")
 			dashes--
 		}
-		fmt.Fprintf(out, " | ")
+		fmt.Fprintf(out, " |")
+		if i < last {
+			fmt.Fprintf(out, " ")
+		}
 	}
 	fmt.Fprintf(out, "\n")
 	for _, row := range rows {
 		fmt.Fprintf(out, "| ")
+		last := len(row) - 1
 		for i, entry := range row {
 			spaces := sizes[i] - len(entry)
 			fmt.Fprintf(out, "%s", entry)
@@ -213,7 +222,10 @@ func printTable(out io.Writer, headers []string, rows [][]string) {
 				fmt.Fprintf(out, " ")
 				spaces--
 			}
-			fmt.Fprintf(out, " | ")
+			fmt.Fprintf(out, " |")
+			if i < last {
+				fmt.Fprintf(out, " ")
+			}
 		}
 		fmt.Fprintf(out, "\n")
 	}
@@ -411,6 +423,39 @@ var (
 	}
 )
 
+func kmeansEntropy(training []iris.Iris, distance kmeans.DistanceFunction) (entropy float64) {
+	rawData := make([][]float64, 0, len(training))
+	for _, item := range training {
+		rawData = append(rawData, item.Measures)
+	}
+	labels, err := kmeans.Kmeans(rawData, 3, distance, 10000)
+	if err != nil {
+		panic(err)
+	}
+	histograms := make(map[int][3]uint)
+	for i, predicted := range labels {
+		histogram := histograms[predicted]
+		histogram[iris.Labels[training[i].Label]]++
+		histograms[predicted] = histogram
+	}
+	total := uint(0)
+	for _, histogram := range histograms {
+		e, s := 0.0, uint(0)
+		for _, c := range histogram {
+			if c == 0 {
+				continue
+			}
+			s += c
+			counts := float64(c)
+			e += counts * math.Log2(counts)
+		}
+		total += s
+		sum := float64(s)
+		entropy += (sum*math.Log2(sum) - e)
+	}
+	return entropy / (float64(total) * MaxEntropy)
+}
+
 func main() {
 	flag.Parse()
 
@@ -536,6 +581,57 @@ func main() {
 		panic(err)
 	}
 	defer readme.Close()
+
+	distances := []struct {
+		Name    string
+		Func    kmeans.DistanceFunction
+		Entropy float64
+	}{
+		{
+			Name: "BrayCurtisDistance",
+			Func: kmeans.BrayCurtisDistance,
+		},
+		{
+			Name: "CanberraDistance",
+			Func: kmeans.CanberraDistance,
+		},
+		{
+			Name: "ChebyshevDistance",
+			Func: kmeans.ChebyshevDistance,
+		},
+		{
+			Name: "EuclideanDistance",
+			Func: kmeans.EuclideanDistance,
+		},
+		{
+			Name: "HammingDistance",
+			Func: kmeans.HammingDistance,
+		},
+		{
+			Name: "ManhattanDistance",
+			Func: kmeans.ManhattanDistance,
+		},
+		{
+			Name: "SquaredEuclideanDistance",
+			Func: kmeans.SquaredEuclideanDistance,
+		},
+	}
+	for i, distance := range distances {
+		distances[i].Entropy = kmeansEntropy(training, distance.Func)
+	}
+	sort.Slice(distances, func(i, j int) bool {
+		return distances[i].Entropy < distances[j].Entropy
+	})
+	{
+		headers, rows := make([]string, 0, 2), make([][]string, 0, len(distances))
+		headers = append(headers, "distance func", "entropy")
+		for _, result := range distances {
+			row := []string{result.Name, fmt.Sprintf("%f", result.Entropy)}
+			rows = append(rows, row)
+		}
+		printTable(readme, headers, rows)
+		fmt.Fprintf(readme, "\n")
+	}
 
 	type Statistic struct {
 		Mode       Mode
