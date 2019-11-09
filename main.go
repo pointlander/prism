@@ -456,6 +456,22 @@ func kmeansEntropy(training []iris.Iris, distance kmeans.DistanceFunction) (entr
 	return entropy / (float64(total) * MaxEntropy)
 }
 
+const Readme = `# Prism: an unsupervised clustering and nearest neighbor search algorithm
+[Clustering](https://en.wikipedia.org/wiki/Cluster_analysis) places similar vectors into the same cluster.
+[Nearest neighbor search](https://en.wikipedia.org/wiki/Nearest_neighbor_search) finds similar vectors to a search query vector.
+Prism does both of these things using [artificial neural networks](https://en.wikipedia.org/wiki/Artificial_neural_network) and [decision trees](https://en.wikipedia.org/wiki/Decision_tree)
+The [gradient descent](https://en.wikipedia.org/wiki/Gradient_descent) learning algorithm is used to find an artificial neural network [autoencoder](https://en.wikipedia.org/wiki/Autoencoder).
+The autoencoder is trained to maximize the [variance](https://en.wikipedia.org/wiki/Variance) of the output of the middle layer for the given training data.
+The top half of the autoencoder is removed and a decision is learned using [variance reduction](https://en.wikipedia.org/wiki/Decision_tree_learning#Variance_reduction).
+The learned decision is used to split the training data into two sets, and the algorithm is recursively applied to create a binary tree.
+
+# Results
+The below results are from applying the algorithm to the [iris data set](https://en.wikipedia.org/wiki/Iris_flower_data_set).
+The label entropy is computed for the learned clusters. The entropy is normalized between 0 and 1. Lower entropy is better.
+The best entropy of [kmeans](https://en.wikipedia.org/wiki/K-means_clustering) is 0.153569, and the best entropy of the prism algorithm is 0.086526.
+Prism performs ~1.8 times better than kmeans on the iris data set.
+`
+
 func main() {
 	flag.Parse()
 
@@ -582,6 +598,9 @@ func main() {
 	}
 	defer readme.Close()
 
+	fmt.Fprintf(readme, Readme)
+	fmt.Fprintf(readme, "\n")
+
 	distances := []struct {
 		Name    string
 		Func    kmeans.DistanceFunction
@@ -629,6 +648,7 @@ func main() {
 			row := []string{result.Name, fmt.Sprintf("%f", result.Entropy)}
 			rows = append(rows, row)
 		}
+		fmt.Fprintf(readme, "## Results for kmeans with different distance metrics\n")
 		printTable(readme, headers, rows)
 		fmt.Fprintf(readme, "\n")
 	}
@@ -653,7 +673,9 @@ func main() {
 				row := []string{result.Mode.String(), fmt.Sprintf("%d", result.Consistency), fmt.Sprintf("%f", result.Entropy)}
 				rows = append(rows, row)
 			}
+			fmt.Fprintf(readme, "## Results for run of algorithm with seed of %d\n", experiment[1].Seed)
 			printTable(readme, headers, rows)
+			fmt.Fprintf(readme, "\n")
 		}
 		for _, result := range experiment {
 			statistics[result.Mode].Sum += result.Entropy
@@ -673,6 +695,6 @@ func main() {
 		row := []string{statistic.Mode.String(), fmt.Sprintf("%f", mean), fmt.Sprintf("%f", variance)}
 		rows = append(rows, row)
 	}
-	fmt.Fprintf(readme, "\n")
+	fmt.Fprintf(readme, "## Averaged results for %d runs of algorithm with different seeds\n", *options.experiments)
 	printTable(readme, headers, rows)
 }
