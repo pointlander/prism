@@ -42,9 +42,15 @@ func NewNetwork(seed int64, batchSize int) *Network {
 	for i := range n.W {
 		n.Parameters = append(n.Parameters, &n.W[i], &n.B[i])
 	}
-	for _, p := range n.Parameters {
-		for i := 0; i < cap(p.X); i++ {
-			p.X = append(p.X, n.Random32(-1, 1))
+	for j, p := range n.Parameters {
+		if j%2 == 0 {
+			for i := 0; i < cap(p.X); i++ {
+				p.X = append(p.X, n.Random32(-1, 1))
+			}
+		} else {
+			for i := 0; i < cap(p.X); i++ {
+				p.X = append(p.X, 0)
+			}
 		}
 	}
 

@@ -27,21 +27,21 @@ Prism performs ~1.8 times better than kmeans on the iris data set.
 ## Results for run of algorithm with seed of 1
 | mode          | consistency | entropy  |
 | ------------- | ----------- | -------- |
-| variance      | 11          | 0.086526 |
+| variance      | 12          | 0.086526 |
+| none          | 5           | 0.086526 |
+| parallel      | 6           | 0.086526 |
 | raw           | 6           | 0.238475 |
-| none          | 6           | 0.343876 |
-| parallel      | 7           | 0.343876 |
-| orthogonality | 7           | 0.351338 |
-| mixed         | 7           | 0.351338 |
-| entropy       | 11          | 0.364361 |
+| entropy       | 12          | 0.318924 |
+| orthogonality | 10          | 0.349453 |
+| mixed         | 10          | 0.349453 |
 
 ## Averaged results for 16 runs of algorithm with different seeds
 | mode          | entropy mean | entropy variance |
 | ------------- | ------------ | ---------------- |
 | variance      | 0.086526     | 0.000000         |
+| none          | 0.234585     | 0.010058         |
 | raw           | 0.238475     | 0.000000         |
-| none          | 0.278432     | 0.009951         |
-| parallel      | 0.301946     | 0.018403         |
-| orthogonality | 0.360151     | 0.002570         |
-| mixed         | 0.363574     | 0.002479         |
-| entropy       | 0.382759     | 0.010021         |
+| parallel      | 0.252508     | 0.013845         |
+| orthogonality | 0.351067     | 0.002562         |
+| mixed         | 0.352417     | 0.002496         |
+| entropy       | 0.382682     | 0.002498         |
