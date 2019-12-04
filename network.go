@@ -42,10 +42,11 @@ func NewNetwork(seed int64, batchSize int) *Network {
 	for i := range n.W {
 		n.Parameters = append(n.Parameters, &n.W[i], &n.B[i])
 	}
+	w := float32(math.Sqrt(1 / 4.0))
 	for j, p := range n.Parameters {
 		if j%2 == 0 {
 			for i := 0; i < cap(p.X); i++ {
-				p.X = append(p.X, n.Random32(-1, 1))
+				p.X = append(p.X, n.Random32(w))
 			}
 		} else {
 			for i := 0; i < cap(p.X); i++ {
@@ -68,9 +69,12 @@ func NewNetwork(seed int64, batchSize int) *Network {
 	return &n
 }
 
-// Random32 generates a random number between a and b
-func (n *Network) Random32(a, b float32) float32 {
-	return (b-a)*n.Float32() + a
+// Random32 generates a bimodal random number
+func (n *Network) Random32(w float32) float32 {
+	if n.Intn(2) == 0 {
+		return -2*w + float32(n.NormFloat64())*w
+	}
+	return 2*w + float32(n.NormFloat64())*w
 }
 
 // Train trains the neural network on training data for iterations
