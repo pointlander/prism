@@ -11,3 +11,8 @@ https://github.com/ziutek/blas
 http://www.face-rec.org/databases/  
 http://vision.ucsd.edu/content/yale-face-database  
 
+# RAWGraphs
+https://news.ycombinator.com/item?id=21695561  
+https://rawgraphs.io/  
+https://github.com/rawgraphs/raw/  
+
