@@ -78,14 +78,14 @@ func (n *Network) Random32(w float32) float32 {
 }
 
 // Train trains the neural network on training data for iterations
-func (n *Network) Train(training []iris.Iris, iterations int) plotter.XYs {
+func (n *Network) Train(training []iris.Iris, iterations int) (cost, variance plotter.XYs) {
 	length := len(training)
 	data := make([]*iris.Iris, 0, length)
 	for i := range training {
 		data = append(data, &training[i])
 	}
 
-	points := make(plotter.XYs, 0, iterations)
+	cost, variance = make(plotter.XYs, 0, iterations), make(plotter.XYs, 0, iterations)
 	for i := 0; i < iterations; i++ {
 		for i := range data {
 			j := i + n.Intn(length-i)
@@ -116,10 +116,10 @@ func (n *Network) Train(training []iris.Iris, iterations int) plotter.XYs {
 				for l, d := range p.D {
 					if math.IsNaN(float64(d)) {
 						fmt.Println(d, k, l)
-						return points
+						return cost, variance
 					} else if math.IsInf(float64(d), 0) {
 						fmt.Println(d, k, l)
-						return points
+						return cost, variance
 					}
 					norm += d * d
 				}
@@ -140,9 +140,21 @@ func (n *Network) Train(training []iris.Iris, iterations int) plotter.XYs {
 				}
 			}
 		}
-		points = append(points, plotter.XY{X: float64(i), Y: float64(total)})
+		cost = append(cost, plotter.XY{X: float64(i), Y: float64(total)})
+
+		sum, sumSquared, count := float32(0), float32(0), 0
+		for _, p := range n.Parameters {
+			for _, x := range p.X {
+				sum += x
+				sumSquared += x * x
+				count++
+			}
+		}
+		sumSquared /= float32(count)
+		sum /= float32(count)
+		variance = append(variance, plotter.XY{X: float64(i), Y: float64(sumSquared - sum*sum)})
 	}
-	return points
+	return cost, variance
 }
 
 // Embeddings generates the embeddings

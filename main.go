@@ -279,7 +279,7 @@ func (c *Context) neuralNetwork(d int, label, count uint, embeddings *Embeddings
 		if count > 0 {
 			iterations *= 10
 		}
-		points := network.Train(training, iterations)
+		points, variance := network.Train(training, iterations)
 
 		if makePlot && c.Seed == 1 {
 			p, err := plot.New()
@@ -300,6 +300,28 @@ func (c *Context) neuralNetwork(d int, label, count uint, embeddings *Embeddings
 			p.Add(scatter)
 
 			err = p.Save(8*vg.Inch, 8*vg.Inch, fmt.Sprintf("results/epochs_%s_%d.png", mode.String(), c.Count))
+			if err != nil {
+				panic(err)
+			}
+
+			p, err = plot.New()
+			if err != nil {
+				panic(err)
+			}
+
+			p.Title.Text = mode.String()
+			p.X.Label.Text = "epochs"
+			p.Y.Label.Text = "variance"
+
+			scatter, err = plotter.NewScatter(variance)
+			if err != nil {
+				panic(err)
+			}
+			scatter.GlyphStyle.Radius = vg.Length(1)
+			scatter.GlyphStyle.Shape = draw.CircleGlyph{}
+			p.Add(scatter)
+
+			err = p.Save(8*vg.Inch, 8*vg.Inch, fmt.Sprintf("results/variance_%s_%d.png", mode.String(), c.Count))
 			if err != nil {
 				panic(err)
 			}
